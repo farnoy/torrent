@@ -468,10 +468,6 @@ processPiece state ix chunkField =  do
   unless hashCheck $ do
     print $ "Validating hashes " <> show hashCheck
     print ix
-    print defaultPieceLen
-    print $ B.length pieces' `quot` 20
-    print infoDict
-    print $ B.length d
 
   wasSetAlready <- atomically $ do
     modifyTVar' (pieceChunks state) (Map.delete ix)

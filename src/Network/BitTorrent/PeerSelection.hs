@@ -18,10 +18,12 @@ type AvailabilityData = VU.Vector Word32
 addToAvailability :: BitField -> AvailabilityData -> AvailabilityData
 addToAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1])
   where f n = (fromIntegral n, (av ! n) + boolToWord (BF.get bf (fromIntegral n)))
+{-# INLINABLE addToAvailability #-}
 
 removeFromAvailability :: BitField -> AvailabilityData -> AvailabilityData
 removeFromAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1])
   where f n = (fromIntegral n, (av ! n) - boolToWord (BF.get bf (fromIntegral n)))
+{-# INLINABLE removeFromAvailability #-}
 
 getNextPiece :: BitField -> AvailabilityData -> Maybe Word32
 getNextPiece bf av = fromIntegral . fst <$> g
@@ -33,5 +35,7 @@ getNextPiece bf av = fromIntegral . fst <$> g
                                else orig
               Nothing -> Just (index, availability)
             ) Nothing av
+{-# INLINABLE getNextPiece #-}
 
 getIncompletePieces bf = filter (not . BF.get bf) [0..BF.length bf - 1]
+{-# INLINABLE getIncompletePieces #-}
