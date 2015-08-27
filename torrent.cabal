@@ -1,0 +1,120 @@
+name:                torrent
+version:             0.1.0.0
+synopsis:            Torrent client
+description:         Please see README.md
+homepage:            http://github.com/farnoy/torrent
+license:             BSD3
+license-file:        LICENSE
+author:              Jakub Okoński
+maintainer:          jakub@okonski.org
+-- copyright:
+category:            Web
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:   Network.BitTorrent.Bencoding
+                   , Network.BitTorrent.Bencoding.Lenses
+                   , Network.BitTorrent.BitField
+                   , Network.BitTorrent.Client
+                   , Network.BitTorrent.FileWriter
+                   , Network.BitTorrent.MetaInfo
+                   , Network.BitTorrent.PeerSelection
+                   , Network.BitTorrent.PWP
+  other-modules:   Network.BitTorrent.Utility
+                 , Network.BitTorrent.ChunkField
+  ghc-options:   -Wall -O -fprof-auto
+  build-depends:   base >= 4.7 && < 5
+                 , attoparsec
+                 , binary
+                 , bytestring
+                 , bytestring-conversion
+                 , containers
+                 , cryptohash
+                 , filepath
+                 , http-client
+                 , http-types
+                 , ieee754
+                 , lens-family
+                 , network
+                 , pretty-hex
+                 , random
+                 , random-extras
+                 , random-fu
+                 , stm
+                 , unordered-containers
+                 , uuid
+                 , vector
+  default-language:    Haskell2010
+
+executable torrent
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall -O -fprof-auto
+  build-depends:       base
+                     , attoparsec
+                     , binary
+                     , bytestring
+                     , bytestring-conversion
+                     , cryptohash
+                     , http-client
+                     , http-types
+                     , lens-family
+                     , network
+                     , pretty-hex
+                     , random-extras
+                     , random-fu
+                     , torrent
+                     , unordered-containers
+                     , uuid
+                     , vector
+  default-language:    Haskell2010
+
+test-suite torrent-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  other-modules: BencodingSpec
+               , BitFieldSpec
+               , ClientSpec
+               , Discover
+               , MetaInfoSpec
+               , PWPSpec
+               , PeerSelectionSpec
+               , SpecHelper
+
+  build-depends:       base
+                     , attoparsec
+                     , async
+                     , binary
+                     , binary-literal-qq
+                     , bytestring
+                     , bytestring-conversion
+                     , containers
+                     , cryptohash
+                     , directory
+                     , filepath
+                     , hspec
+                     , http-client
+                     , ieee754
+                     , lens-family
+                     , network
+                     , random
+                     , random-extras
+                     , random-fu
+                     , pretty-hex
+                     , stm
+                     , torrent
+                     , unordered-containers
+                     , uuid
+                     , vector
+                     , QuickCheck
+                     , quickcheck-instances
+  ghc-options:         -O
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/name/project
