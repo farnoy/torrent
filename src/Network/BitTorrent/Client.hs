@@ -193,7 +193,7 @@ handleMessage state peer msg = do
   where
     emit peerData = writeChan (chan peerData)
     act _ Unchoke = runTorrent state peer handleUnchoke
-    act peerData (Bitfield field) = runTorrent state peer (handleBitfield field)
+    act _ (Bitfield field) = runTorrent state peer (handleBitfield field)
     act _ (Piece ix offset d) =
       runTorrent state peer (receiveChunk ix offset d >> requestNextPiece)
     act peerData (Have ix) = do
