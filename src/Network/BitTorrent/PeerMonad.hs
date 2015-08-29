@@ -158,84 +158,12 @@ fileOperation :: FW.Operation -> Free TorrentM ()
 fileOperation op = liftF $ FileOperation op ()
 {-# INLINABLE fileOperation #-}
 
-handleBitfield :: ByteString -> Free TorrentM ()
-handleBitfield field = do
-  peerData <- getPeerData
-  runSTM $ do
-    len <- BF.length <$> getBitfield
-    let newBitField = BF.BitField field len
-        peer = peerId peerData
-        peerData' = peerData { peerBitField = newBitField }
-    setPeer peer peerData'
-    modifyAvailability $ PS.addToAvailability newBitField
-  emit Interested
-
-receiveChunk :: Word32 -> Word32 -> ByteString -> Free TorrentM ()
-receiveChunk ix offset d = do
-  chunkField <- runSTM $ do
-    chunks <- getChunks
-    case Map.lookup ix chunks of
-      Just (chunkField, chunkData) -> do
-        do
-          -- copy the incoming data into appropriate place in chunkData
-          let (ptr, o, len) = BI.toForeignPtr chunkData
-              chunkVector = VS.unsafeFromForeignPtr ptr o len
-              (ptr', o', len') = BI.toForeignPtr d
-              dataVector = VS.unsafeFromForeignPtr ptr' o' len'
-              dest = VS.take (B.length d) $ VS.drop (fromIntegral offset) chunkVector
-              src = dataVector
-          unsafePerformIO $ VS.copy dest src >> return (return ())
-        let chunkIndex = divideSize offset defaultChunkSize
-            chunkField' = CF.markCompleted chunkField chunkIndex
-
-        modifyChunks $ Map.insert ix (chunkField', chunkData)
-        return True
-      _ -> return False -- someone already filled this
-
-  when chunkField $ processPiece ix
-
-processPiece :: Word32 -> Free TorrentM ()
-processPiece ix = do
-  Just (chunkField, d) <- runSTM (Map.lookup ix <$> getChunks)
-  when (CF.isCompleted chunkField) $ do
-    meta <- getMeta
-    let infoDict = info $ meta
-        pieces' = pieces infoDict
-        defaultPieceLen = pieceLength $ info $ meta
-        getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
-        hashCheck = hash d == getPieceHash ix
-
-    {-unless hashCheck $ do
-      print $ "Validating hashes " <> show hashCheck
-      print ix-}
-
-    wasSetAlready <- runSTM $ do
-      modifyChunks $ Map.delete ix
-      if hashCheck
-        then do
-          bf <- getBitfield
-          let wasSetAlready = BF.get bf ix
-          unless wasSetAlready $
-            modifyBitfield (\bf' -> BF.set bf' ix True)
-          return wasSetAlready
-        else return False
-      -- because we remove the entry from (pieceChunks state),
-      -- but not indicate it as downloaded in the bitField,
-      -- it will be reacquired again
-
-    when (hashCheck && not wasSetAlready) $ do
-      -- print $ "writing " <> show ix
-      fileOperation $ FW.WriteBlock (defaultPieceLen * ix) d
-
 runTorrent :: ClientState -> ByteString -> Free TorrentM a -> IO a
 runTorrent state peerHash t = do
   Just peerData <- atomically $
     Map.lookup peerHash <$> readTVar (statePeers state)
   evalTorrent state peerData t
 {-# INLINABLE runTorrent #-}
-
-handleUnchoke :: Free TorrentM ()
-handleUnchoke = peerUnchoked >> requestNextPiece
 
 evalTorrent :: ClientState -> PeerData -> Free TorrentM a -> IO a
 evalTorrent _ _ (Pure a) = return a
@@ -362,3 +290,76 @@ evalTorrent state peerData (Free (GetMeta next)) = do
 evalTorrent state peerData (Free (FileOperation op next)) = do
   writeChan (outputChan state) op
   evalTorrent state peerData next
+
+handleUnchoke :: Free TorrentM ()
+handleUnchoke = peerUnchoked >> requestNextPiece
+{-# INLINABLE handleUnchoke #-}
+
+receiveChunk :: Word32 -> Word32 -> ByteString -> Free TorrentM ()
+receiveChunk ix offset d = do
+  chunkField <- runSTM $ do
+    chunks <- getChunks
+    case Map.lookup ix chunks of
+      Just (chunkField, chunkData) -> do
+        do
+          -- copy the incoming data into appropriate place in chunkData
+          let (ptr, o, len) = BI.toForeignPtr chunkData
+              chunkVector = VS.unsafeFromForeignPtr ptr o len
+              (ptr', o', len') = BI.toForeignPtr d
+              dataVector = VS.unsafeFromForeignPtr ptr' o' len'
+              dest = VS.take (B.length d) $ VS.drop (fromIntegral offset) chunkVector
+              src = dataVector
+          unsafePerformIO $ VS.copy dest src >> return (return ())
+        let chunkIndex = divideSize offset defaultChunkSize
+            chunkField' = CF.markCompleted chunkField chunkIndex
+
+        modifyChunks $ Map.insert ix (chunkField', chunkData)
+        return True
+      _ -> return False -- someone already filled this
+
+  when chunkField $ processPiece ix
+
+processPiece :: Word32 -> Free TorrentM ()
+processPiece ix = do
+  Just (chunkField, d) <- runSTM (Map.lookup ix <$> getChunks)
+  when (CF.isCompleted chunkField) $ do
+    meta <- getMeta
+    let infoDict = info $ meta
+        pieces' = pieces infoDict
+        defaultPieceLen = pieceLength $ info $ meta
+        getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
+        hashCheck = hash d == getPieceHash ix
+
+    {-unless hashCheck $ do
+      print $ "Validating hashes " <> show hashCheck
+      print ix-}
+
+    wasSetAlready <- runSTM $ do
+      modifyChunks $ Map.delete ix
+      if hashCheck
+        then do
+          bf <- getBitfield
+          let wasSetAlready = BF.get bf ix
+          unless wasSetAlready $
+            modifyBitfield (\bf' -> BF.set bf' ix True)
+          return wasSetAlready
+        else return False
+      -- because we remove the entry from (pieceChunks state),
+      -- but not indicate it as downloaded in the bitField,
+      -- it will be reacquired again
+
+    when (hashCheck && not wasSetAlready) $ do
+      -- print $ "writing " <> show ix
+      fileOperation $ FW.WriteBlock (defaultPieceLen * ix) d
+
+handleBitfield :: ByteString -> Free TorrentM ()
+handleBitfield field = do
+  peerData <- getPeerData
+  runSTM $ do
+    len <- BF.length <$> getBitfield
+    let newBitField = BF.BitField field len
+        peer = peerId peerData
+        peerData' = peerData { peerBitField = newBitField }
+    setPeer peer peerData'
+    modifyAvailability $ PS.addToAvailability newBitField
+  emit Interested
