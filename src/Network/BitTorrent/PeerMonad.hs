@@ -8,9 +8,7 @@ module Network.BitTorrent.PeerMonad (
 , receiveChunk
 , processPiece
 , requestNextPiece
-, handleUnchoke
-, handleBitfield
-, handleHave
+, handlePWP
 ) where
 
 import Control.Concurrent
@@ -364,6 +362,7 @@ handleBitfield field = do
     setPeer peer peerData'
     modifyAvailability $ PS.addToAvailability newBitField
   emit Interested
+{-# INLINABLE handleBitfield #-}
 
 handleHave :: Word32 -> Free TorrentM ()
 handleHave ix = do
@@ -375,3 +374,23 @@ handleHave ix = do
     let oldBf = peerBitField peerData
         newBf = peerBitField peerData'
     modifyAvailability $ PS.addToAvailability newBf . PS.removeFromAvailability oldBf
+{-# INLINABLE handleHave #-}
+
+handleInterested :: Free TorrentM ()
+handleInterested = do
+  peerData <- getPeerData
+  when (amChoking peerData) $ do
+    emit Unchoke
+    let peerData' = peerData { amChoking = False }
+    let peer = peerId peerData
+    runSTM $ setPeer peer peerData'
+{-# INLINABLE handleInterested #-}
+
+handlePWP :: PWP -> Free TorrentM ()
+handlePWP Unchoke = handleUnchoke
+handlePWP (Bitfield field) = handleBitfield field
+handlePWP (Piece ix offset d) = receiveChunk ix offset d >> requestNextPiece
+handlePWP (Have ix) = handleHave ix
+handlePWP Interested = handleInterested
+handlePWP (Request ix offset len) = serveChunk ix offset len
+handlePWP _ = return () -- logging?

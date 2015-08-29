@@ -169,28 +169,7 @@ setPeer peer peerData state = modifyTVar' (statePeers state) (Map.insert peer pe
 {-# INLINABLE setPeer #-}
 
 handleMessage :: ClientState -> ByteString -> PWP -> IO ()
-handleMessage state peer msg = do
-  peers <- atomically $ readTVar $ statePeers state
-  case Map.lookup peer peers of
-    Just peerData -> act peerData msg
-    Nothing -> return ()
-  where
-    emit peerData = writeChan (chan peerData)
-    act _ Unchoke = runTorrent state peer handleUnchoke
-    act _ (Bitfield field) = runTorrent state peer (handleBitfield field)
-    act _ (Piece ix offset d) =
-      runTorrent state peer (receiveChunk ix offset d >> requestNextPiece)
-    act _ (Have ix) =
-      runTorrent state peer (handleHave ix)
-    act peerData Interested | amChoking peerData = do
-      emit peerData Unchoke
-      let peerData' = peerData { amChoking = False }
-      atomically $ setPeer peer peerData' state
-    act _ (Request ix offset len) =
-      runTorrent state peer (serveChunk ix offset len)
-    act _ m = do
-      putStrLn "unhandled Message"
-      print m
+handleMessage state peer = runTorrent state peer . handlePWP
 
 queryTracker :: ClientState -> IO ()
 queryTracker state = do
