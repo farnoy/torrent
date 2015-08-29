@@ -25,6 +25,8 @@ library
                    , Network.BitTorrent.PWP
   other-modules:   Network.BitTorrent.Utility
                  , Network.BitTorrent.ChunkField
+                 , Network.BitTorrent.Types
+                 , Network.BitTorrent.PeerMonad
   ghc-options:   -Wall -O -fprof-auto
   build-depends:   base >= 4.7 && < 5
                  , attoparsec
@@ -34,6 +36,7 @@ library
                  , containers
                  , cryptohash
                  , filepath
+                 , free
                  , http-client
                  , http-types
                  , ieee754

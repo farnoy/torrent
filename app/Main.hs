@@ -2,9 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
-import Control.Concurrent
-import qualified Data.Attoparsec.ByteString.Char8 as AC
-import qualified Data.ByteString as B
+import qualified Data.Attoparsec.ByteString.Lazy as AL
+import qualified Data.ByteString.Lazy as BL
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
@@ -12,8 +11,8 @@ import System.Environment
 
 openTorrentFile :: String -> IO (Maybe MetaInfo)
 openTorrentFile filename = do
-  contents <- B.readFile filename
-  return $ AC.maybeResult (AC.parse value contents) >>= parseMetaInfo
+  contents <- BL.readFile filename
+  return $ AL.maybeResult (AL.parse value contents) >>= parseMetaInfo
 
 main :: IO ()
 main = do

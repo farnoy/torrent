@@ -213,7 +213,6 @@ spec = do
           r <- atomically $ readTVar (bitField state2)
           print r
           print fullBitField
-          putStrLn $ "piecesize " <> show pieceSize
           res `shouldBe` Just True)
 
 

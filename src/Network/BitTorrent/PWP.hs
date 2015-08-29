@@ -26,6 +26,7 @@ data PWP = KeepAlive
 
 putPieceDescription :: Word32 -> Word32 -> Word32 -> Put
 putPieceDescription p o l = traverse put [p, o, l] >> return ()
+{-# INLINABLE putPieceDescription #-}
 
 instance Binary PWP where
   put KeepAlive =
@@ -64,6 +65,7 @@ instance Binary PWP where
     put (13 :: Word32)
     put (8 :: Word8)
     putPieceDescription piece offset len
+  {-# INLINABLE put #-}
 
   get = do
     len <- get :: Get Word32
@@ -86,6 +88,7 @@ instance Binary PWP where
                      <*> getByteString (fromIntegral len - 9)
           8 -> Cancel <$> get <*> get <*> get
           _ -> fail "incorrect!"
+  {-# INLINABLE get #-}
 
 data BHandshake = BHandshake ByteString ByteString deriving(Show, Eq)
 
