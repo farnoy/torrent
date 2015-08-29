@@ -34,12 +34,10 @@ import qualified Data.Vector.Unboxed as VU
 import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
-import Network.BitTorrent.BitField (BitField)
 import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
-import qualified Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
 import Network.HTTP.Client
@@ -52,20 +50,6 @@ newPeer pieceCount addr peer = do
   c <- newChan
   return $ PeerData True False True False addr peer (BF.newBitField pieceCount) c 0
 {-# INLINABLE newPeer #-}
-
-addToAvailability :: BitField -> ClientState -> STM ()
-addToAvailability bf state = do
-  avData <- readTVar (availabilityData state)
-  let avData' = PS.addToAvailability bf avData
-  writeTVar (availabilityData state) avData'
-{-# INLINABLE addToAvailability #-}
-
-removeFromAvailability :: BitField -> ClientState -> STM ()
-removeFromAvailability bf state = do
-  avData <- readTVar (availabilityData state)
-  let avData' = PS.removeFromAvailability bf avData
-  writeTVar (availabilityData state) avData'
-{-# INLINABLE removeFromAvailability #-}
 
 newClientState :: FilePath -> MetaInfo -> Word16 -> IO ClientState
 newClientState dir meta listenPort = do
@@ -196,12 +180,8 @@ handleMessage state peer msg = do
     act _ (Bitfield field) = runTorrent state peer (handleBitfield field)
     act _ (Piece ix offset d) =
       runTorrent state peer (receiveChunk ix offset d >> requestNextPiece)
-    act peerData (Have ix) = do
-      let peerData' = peerData { peerBitField = BF.set (peerBitField peerData) ix True }
-      atomically $ do
-        setPeer peer peerData' state
-        removeFromAvailability (peerBitField peerData) state
-        addToAvailability (peerBitField peerData') state
+    act _ (Have ix) =
+      runTorrent state peer (handleHave ix)
     act peerData Interested | amChoking peerData = do
       emit peerData Unchoke
       let peerData' = peerData { amChoking = False }

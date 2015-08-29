@@ -10,6 +10,7 @@ module Network.BitTorrent.PeerMonad (
 , requestNextPiece
 , handleUnchoke
 , handleBitfield
+, handleHave
 ) where
 
 import Control.Concurrent
@@ -363,3 +364,14 @@ handleBitfield field = do
     setPeer peer peerData'
     modifyAvailability $ PS.addToAvailability newBitField
   emit Interested
+
+handleHave :: Word32 -> Free TorrentM ()
+handleHave ix = do
+  peerData <- getPeerData
+  let peerData' = peerData { peerBitField = BF.set (peerBitField peerData) ix True }
+      peer = peerId peerData
+  runSTM $ do
+    setPeer peer peerData'
+    let oldBf = peerBitField peerData
+        newBf = peerBitField peerData'
+    modifyAvailability $ PS.addToAvailability newBf . PS.removeFromAvailability oldBf
