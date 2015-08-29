@@ -180,6 +180,10 @@ mainPeerLoop state peer handle parser =
       let replacementParser = runGetIncremental get `pushChunk` unused
       mainPeerLoop state peer handle replacementParser
 
+setPeer :: ByteString -> PeerData -> ClientState -> STM ()
+setPeer peer peerData state = modifyTVar' (statePeers state) (Map.insert peer peerData)
+{-# INLINABLE setPeer #-}
+
 handleMessage :: ClientState -> ByteString -> PWP -> IO ()
 handleMessage state peer msg = do
   peers <- atomically $ readTVar $ statePeers state
@@ -188,16 +192,8 @@ handleMessage state peer msg = do
     Nothing -> return ()
   where
     emit peerData = writeChan (chan peerData)
-    act _ Unchoke = runTorrent state peer requestNextPiece
-    act peerData (Bitfield field) = do
-      -- take our bitfield length
-      bf <- atomically $ readTVar $ bitField state
-      let newBitField = BF.BitField field (BF.length bf)
-      let peerData' = peerData { peerBitField = newBitField }
-      atomically $ do
-        setPeer peer peerData' state
-        addToAvailability newBitField state
-      emit peerData Interested
+    act _ Unchoke = runTorrent state peer handleUnchoke
+    act peerData (Bitfield field) = runTorrent state peer (handleBitfield field)
     act _ (Piece ix offset d) =
       runTorrent state peer (receiveChunk ix offset d >> requestNextPiece)
     act peerData (Have ix) = do

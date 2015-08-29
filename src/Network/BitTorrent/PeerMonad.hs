@@ -1,4 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveFunctor #-}
 module Network.BitTorrent.PeerMonad (
   runTorrent
@@ -6,6 +8,8 @@ module Network.BitTorrent.PeerMonad (
 , receiveChunk
 , processPiece
 , requestNextPiece
+, handleUnchoke
+, handleBitfield
 ) where
 
 import Control.Concurrent
@@ -17,25 +21,87 @@ import Crypto.Hash.SHA1
 import Data.Binary
 import qualified Data.ByteString as B
 import Data.ByteString.Internal as BI
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict as Map
 import Data.Monoid
 import Data.Vector.Storable.Mutable as VS
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
-import qualified Network.BitTorrent.PeerSelection as PS
+import Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
 import System.IO.Unsafe
-import System.Random
+import System.Random hiding(next)
+
+type Chunks = Map Word32 (ChunkField, ByteString)
+
+data TorrentSTM a = GetChunks (Chunks -> a)
+                  | ModifyChunks (Chunks -> Chunks) a
+                  | SetPeer ByteString PeerData a
+                  | ReadBitfield (BF.BitField -> a)
+                  | ReadAvailability (AvailabilityData -> a)
+                  | ModifyAvailability (AvailabilityData -> AvailabilityData) a
+                  deriving(Functor)
+
+getChunks :: Free TorrentSTM Chunks
+getChunks = liftF $ GetChunks id
+
+modifyChunks :: (Chunks -> Chunks) -> Free TorrentSTM ()
+modifyChunks mut = liftF $ ModifyChunks mut ()
+
+setPeer :: ByteString -> PeerData -> Free TorrentSTM ()
+setPeer peer peerData = liftF $ SetPeer peer peerData ()
+
+getBitfield :: Free TorrentSTM BF.BitField
+getBitfield = liftF $ ReadBitfield id
+
+readAvailability :: Free TorrentSTM AvailabilityData
+readAvailability = liftF $ ReadAvailability id
+
+modifyAvailability :: (AvailabilityData -> AvailabilityData) -> Free TorrentSTM ()
+modifyAvailability mut = liftF $ ModifyAvailability mut ()
+
+runTorrentSTM :: ClientState -> Free TorrentSTM a -> STM a
+runTorrentSTM _ (Pure a) = return a
+runTorrentSTM state (Free (GetChunks f)) = do
+  chunks <- readTVar (pieceChunks state)
+  runTorrentSTM state $ f chunks
+runTorrentSTM state (Free (ModifyChunks f t)) = do
+  modifyTVar' (pieceChunks state) f
+  runTorrentSTM state t
+runTorrentSTM state (Free (SetPeer peer peerData t)) = do
+  modifyTVar' (statePeers state) (Map.insert peer peerData)
+  runTorrentSTM state t
+runTorrentSTM state (Free (ReadBitfield next)) = do
+  res <- readTVar (bitField state)
+  runTorrentSTM state (next res)
+runTorrentSTM state (Free (ReadAvailability next)) = do
+  res <- readTVar (availabilityData state)
+  runTorrentSTM state (next res)
+runTorrentSTM state (Free (ModifyAvailability mut next)) = do
+  modifyTVar' (availabilityData state) mut
+  runTorrentSTM state next
 
 data TorrentM a = ServeChunk Word32 Word32 Word32 a
                 | ReceiveChunk Word32 Word32 ByteString a
                 | ProcessPiece Word32 a
                 | RequestNextPiece a
-                deriving(Functor)
+                | PeerUnchoked a
+                | forall b. RunSTM (Free TorrentSTM b) (b -> a)
+                | GetPeerData (PeerData -> a)
+                | Emit PWP a
+
+instance Functor TorrentM where
+  fmap f (ServeChunk a b c next) = ServeChunk a b c (f next)
+  fmap f (ReceiveChunk a b d next) = ReceiveChunk a b d (f next)
+  fmap f (ProcessPiece a next) = ProcessPiece a (f next)
+  fmap f (RequestNextPiece next) = RequestNextPiece (f next)
+  fmap f (PeerUnchoked next) = PeerUnchoked (f next)
+  fmap f (RunSTM action next) = RunSTM action (fmap f next)
+  fmap f (GetPeerData next) = GetPeerData (fmap f next)
+  fmap f (Emit pwp next) = Emit pwp (f next)
 
 serveChunk :: Word32 -> Word32 -> Word32 -> Free TorrentM ()
 serveChunk a b c = liftF $ ServeChunk a b c ()
@@ -53,11 +119,47 @@ requestNextPiece :: Free TorrentM ()
 requestNextPiece = liftF $ RequestNextPiece ()
 {-# INLINABLE requestNextPiece #-}
 
+peerUnchoked :: Free TorrentM ()
+peerUnchoked = liftF $ PeerUnchoked ()
+{-# INLINABLE peerUnchoked #-}
+
+runSTM :: Free TorrentSTM a -> Free TorrentM a
+runSTM stm = liftF $ RunSTM stm id
+{-# INLINABLE runSTM #-}
+
+getPeerData :: Free TorrentM PeerData
+getPeerData = liftF $ GetPeerData id
+{-# INLINABLE getPeerData #-}
+
+getPeerHash :: Free TorrentM ByteString
+getPeerHash = peerId <$> getPeerData
+{-# INLINABLE getPeerHash #-}
+
+emit :: PWP -> Free TorrentM ()
+emit pwp = liftF $ Emit pwp ()
+{-# INLINABLE emit #-}
+
+handleBitfield :: ByteString -> Free TorrentM ()
+handleBitfield field = do
+  peerData <- getPeerData
+  runSTM $ do
+    len <- BF.length <$> getBitfield
+    let newBitField = BF.BitField field len
+        peer = peerId peerData
+        peerData' = peerData { peerBitField = newBitField }
+    setPeer peer peerData'
+    modifyAvailability $ PS.addToAvailability newBitField
+  emit Interested
+
 runTorrent :: ClientState -> ByteString -> Free TorrentM a -> IO a
 runTorrent state peerHash t = do
-  Just peerData <- atomically $ getPeer peerHash state
+  Just peerData <- atomically $
+    Map.lookup peerHash <$> readTVar (statePeers state)
   evalTorrent state peerData t
 {-# INLINABLE runTorrent #-}
+
+handleUnchoke :: Free TorrentM ()
+handleUnchoke = peerUnchoked >> requestNextPiece
 
 evalTorrent :: ClientState -> PeerData -> Free TorrentM a -> IO a
 evalTorrent _ _ (Pure a) = return a
@@ -69,11 +171,12 @@ evalTorrent state peerData (Free (ServeChunk ix offset len t)) = do
   where defaultPieceLen = pieceLength $ info $ metaInfo state
         action d = writeChan (chan peerData) (Piece ix offset d)
 evalTorrent state peerData (Free (ReceiveChunk ix offset d t)) = do
-  chunkField <- atomically $ do
-    chunks <- readTVar (pieceChunks state)
+  chunkField <- atomically $ runTorrentSTM state $ do
+    chunks <- getChunks
     case Map.lookup ix chunks of
       Just (chunkField, chunkData) -> do
         do
+          -- copy the incoming data into appropriate place in chunkData
           let (ptr, o, len) = BI.toForeignPtr chunkData
               chunkVector = VS.unsafeFromForeignPtr ptr o len
               (ptr', o', len') = BI.toForeignPtr d
@@ -84,17 +187,17 @@ evalTorrent state peerData (Free (ReceiveChunk ix offset d t)) = do
         let chunkIndex = divideSize offset defaultChunkSize
             chunkField' = CF.markCompleted chunkField chunkIndex
 
-        modifyTVar' (pieceChunks state) $ Map.insert ix (chunkField', chunkData)
-        return $ Just chunkField'
-      _ -> return Nothing -- someone already filled this
+        modifyChunks $ Map.insert ix (chunkField', chunkData)
+        return True
+      _ -> return False -- someone already filled this
 
-  case chunkField of
-    Just _ -> evalTorrent state peerData (processPiece ix)
-    Nothing -> return ()
+  if chunkField
+    then evalTorrent state peerData (processPiece ix)
+    else return ()
 
   evalTorrent state peerData t
 evalTorrent state peerData (Free (ProcessPiece ix t)) = do
-  Just (chunkField, d) <- atomically $ Map.lookup ix <$> readTVar (pieceChunks state)
+  Just (chunkField, d) <- evalTorrent state peerData (runSTM (Map.lookup ix <$> getChunks))
   when (CF.isCompleted chunkField) $ do
     let infoDict = info $ metaInfo state
         pieces' = pieces infoDict
@@ -122,75 +225,90 @@ evalTorrent state peerData (Free (ProcessPiece ix t)) = do
 
     when (hashCheck && not wasSetAlready) $ do
       let outChan = outputChan state
-      print $ "writing " <> show ix
+      -- print $ "writing " <> show ix
       writeChan outChan $ FW.WriteBlock (defaultPieceLen * ix) d
       return ()
 
   evalTorrent state peerData t
 evalTorrent state peerData (Free (RequestNextPiece t)) = do
-  (chunks, bf, avData) <- atomically $ do
-    chunks <- readTVar (pieceChunks state)
-    avData <- readTVar (availabilityData state)
-    bf <- readTVar (bitField state)
-    return (chunks, bf, avData)
-  let peer = peerId peerData
-      c = chan peerData
-      pbf = peerBitField peerData
-  let defaultPieceLen :: Word32
-      defaultPieceLen = pieceLength $ info $ metaInfo state
-      infoDict = info $ metaInfo state
-      totalSize = Meta.length infoDict
+  unless (peerChoking peerData) $ do
+    (chunks, bf, avData) <- atomically $ do
+      chunks <- readTVar (pieceChunks state)
+      avData <- readTVar (availabilityData state)
+      bf <- readTVar (bitField state)
+      return (chunks, bf, avData)
+    let peer = peerId peerData
+        c = chan peerData
+        pbf = peerBitField peerData
+    let defaultPieceLen :: Word32
+        defaultPieceLen = pieceLength $ info $ metaInfo state
+        infoDict = info $ metaInfo state
+        totalSize = Meta.length infoDict
 
-  let lastStage = BF.completed bf > 0.9
-  let bfrequestable = if lastStage
-                        then bf
-                        else Map.foldlWithKey' (\bit ix (cf, _) ->
-                               if not (BF.get pbf ix) || CF.isRequested cf
-                                 then BF.set bit ix True
-                                 else bit) bf chunks
+    let lastStage = BF.completed bf > 0.9
+    let bfrequestable = if lastStage
+                          then bf
+                          else Map.foldlWithKey' (\bit ix (cf, _) ->
+                                 if not (BF.get pbf ix) || CF.isRequested cf
+                                   then BF.set bit ix True
+                                   else bit) bf chunks
 
-  let incompletePieces = PS.getIncompletePieces bfrequestable
+    let incompletePieces = PS.getIncompletePieces bfrequestable
 
-  nextPiece <- if lastStage
-                 then do
-                   if Prelude.length incompletePieces - 1 > 0
-                     then do
-                       rand <- randomRIO (0, Prelude.length incompletePieces - 1)
-                       return $ Just $ incompletePieces !! rand
-                     else return Nothing
-                 else return $ PS.getNextPiece bfrequestable avData
+    nextPiece <- if lastStage
+                   then do
+                     if Prelude.length incompletePieces - 1 > 0
+                       then do
+                         rand <- randomRIO (0, Prelude.length incompletePieces - 1)
+                         return $ Just $ incompletePieces !! rand
+                       else return Nothing
+                   else return $ PS.getNextPiece bfrequestable avData
 
-  case nextPiece of
-    Nothing -> return () -- putStrLn "we have all dem pieces"
-    Just ix -> do
-      let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
-      case Map.lookup ix chunks of
-        Just (chunkField, chunkData) -> do
-          let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
-          nextChunk <- if lastStage
-                      then do
-                        rand <- randomRIO (0, Prelude.length incomplete - 1)
-                        return $ Just (cf, incomplete !! rand)
-                      else return $ CF.getNextChunk chunkField
-          case nextChunk of
-            Just (chunkField', cix) -> do
-              let nextChunkSize = expectedChunkSize totalSize ix (cix+1) pieceLen defaultChunkSize
-                  request = Request ix (cix * defaultChunkSize) nextChunkSize
-                  modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-              putStrLn $ "requesting " <> show request
-              atomically $ do
-                setPeer peer modifiedPeer state
-                modifyTVar' (pieceChunks state) $ Map.insert ix (chunkField', chunkData)
-              writeChan c request
-              when (requestsLive modifiedPeer < maxRequestsPerPeer) $
-                runTorrent state peer requestNextPiece
-            _ -> runTorrent state peer (processPiece ix >> requestNextPiece)
-        Nothing -> do
-          let chunksCount = chunksInPieces pieceLen defaultChunkSize
-              chunkData = B.replicate (fromIntegral pieceLen) 0
-              insertion = (CF.newChunkField chunksCount, chunkData)
-          atomically $
-            modifyTVar' (pieceChunks state) $ Map.insert ix insertion
-          runTorrent state peer requestNextPiece
+    case nextPiece of
+      Nothing -> return () -- putStrLn "we have all dem pieces"
+      Just ix -> do
+        let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
+        case Map.lookup ix chunks of
+          Just (chunkField, chunkData) -> do
+            let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
+            nextChunk <- if lastStage
+                        then do
+                          rand <- randomRIO (0, Prelude.length incomplete - 1)
+                          return $ Just (cf, incomplete !! rand)
+                        else return $ CF.getNextChunk chunkField
+            case nextChunk of
+              Just (chunkField', cix) -> do
+                let nextChunkSize = expectedChunkSize totalSize ix (cix+1) pieceLen defaultChunkSize
+                    request = Request ix (cix * defaultChunkSize) nextChunkSize
+                    modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
+                -- putStrLn $ "requesting " <> show request
+                atomically $ runTorrentSTM state $ do
+                  setPeer peer modifiedPeer
+                  modifyChunks (Map.insert ix (chunkField', chunkData))
+                writeChan c request
+                when (requestsLive modifiedPeer < maxRequestsPerPeer) $
+                  runTorrent state peer requestNextPiece
+              _ -> runTorrent state peer (processPiece ix >> requestNextPiece)
+          Nothing -> do
+            let chunksCount = chunksInPieces pieceLen defaultChunkSize
+                chunkData = B.replicate (fromIntegral pieceLen) 0
+                insertion = (CF.newChunkField chunksCount, chunkData)
+            atomically $ runTorrentSTM state $
+              modifyChunks $ Map.insert ix insertion
+            runTorrent state peer requestNextPiece
 
   evalTorrent state peerData t
+evalTorrent state peerData (Free (PeerUnchoked t)) = do
+  let peer = peerId peerData
+      peerData' = peerData { peerChoking = False }
+  atomically $ runTorrentSTM state $
+    setPeer peer peerData'
+  runTorrent state (peerId peerData) t
+evalTorrent state peerData (Free (RunSTM a next)) = do
+  res <- atomically $ runTorrentSTM state a
+  evalTorrent state peerData (next res)
+evalTorrent state peerData (Free (GetPeerData next)) = do
+  evalTorrent state peerData (next peerData)
+evalTorrent state peerData (Free (Emit pwp next)) = do
+  writeChan (chan peerData) pwp
+  evalTorrent state peerData next

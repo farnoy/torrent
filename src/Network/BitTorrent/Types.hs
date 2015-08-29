@@ -2,11 +2,9 @@ module Network.BitTorrent.Types where
 
 import Control.Concurrent
 import Control.Concurrent.STM.TVar
-import Control.Monad.STM
 import Data.Binary
 import Data.ByteString.Internal as BI
 import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 -- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
@@ -42,14 +40,6 @@ data ClientState = ClientState {
 , ourPort :: Word16
 , availabilityData :: TVar PS.AvailabilityData
 }
-
-getPeer :: ByteString -> ClientState -> STM (Maybe PeerData)
-getPeer peer state = Map.lookup peer <$> readTVar (statePeers state)
-{-# INLINABLE getPeer #-}
-
-setPeer :: ByteString -> PeerData -> ClientState -> STM ()
-setPeer peer peerData state = modifyTVar' (statePeers state) (Map.insert peer peerData)
-{-# INLINABLE setPeer #-}
 
 defaultChunkSize :: Word32
 defaultChunkSize = 2 ^ (16 :: Word32)
