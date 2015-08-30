@@ -29,7 +29,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.UUID hiding (fromByteString)
 import Data.UUID.V4
-import qualified Data.Vector.Unboxed as VU
+import qualified Data.Vector.Storable as VS
 -- import Hexdump
 import Lens.Family2
 import Network.BitTorrent.Bencoding
@@ -66,7 +66,7 @@ newClientState dir meta listenPort = do
     threadDelay 5000000
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
   outChan <- FW.operate outHandle
-  avData <- newTVarIO $ VU.replicate numPieces 0
+  avData <- newTVarIO $ VS.replicate numPieces 0
   return $ ClientState peers peer meta bit_field chunks outChan listenPort avData
 
 btListen :: ClientState -> IO Socket
@@ -184,7 +184,7 @@ queryTracker state = do
   putStrLn "pieceCount"
   print $ (`quot`20) $ B.length $ pieces $ info meta
   avData <- atomically $ readTVar $ availabilityData state
-  print $ VU.length avData
+  print $ VS.length avData
   putStrLn "pieceLen"
   print $ pieceLength $ info meta
 

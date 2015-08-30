@@ -4,10 +4,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 module Network.BitTorrent.PeerMonad (
   runTorrent
-, serveChunk
-, receiveChunk
-, processPiece
-, requestNextPiece
 , handlePWP
 ) where
 
@@ -154,7 +150,7 @@ getMeta = liftF $ GetMeta id
 {-# INLINABLE getMeta #-}
 
 fileOperation :: FW.Operation -> Free TorrentM ()
-fileOperation op = liftF $ FileOperation op ()
+fileOperation op = liftF $ (FileOperation $! op) ()
 {-# INLINABLE fileOperation #-}
 
 runTorrent :: ClientState -> ByteString -> Free TorrentM a -> IO a

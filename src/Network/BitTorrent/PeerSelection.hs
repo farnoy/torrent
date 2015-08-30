@@ -7,13 +7,13 @@ module Network.BitTorrent.PeerSelection (
 ) where
 
 import Data.Word
-import Data.Vector.Unboxed ((//), (!))
-import qualified Data.Vector.Unboxed as VU
+import Data.Vector.Storable ((//), (!))
+import qualified Data.Vector.Storable as VS
 import Network.BitTorrent.BitField (BitField)
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.Utility
 
-type AvailabilityData = VU.Vector Word32
+type AvailabilityData = VS.Vector Word32
 
 addToAvailability :: BitField -> AvailabilityData -> AvailabilityData
 addToAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1])
@@ -27,7 +27,7 @@ removeFromAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1]
 
 getNextPiece :: BitField -> AvailabilityData -> Maybe Word32
 getNextPiece bf av = fromIntegral . fst <$> g
-  where g = VU.ifoldl' (\counter index availability -> if BF.get bf (fromIntegral index)
+  where g = VS.ifoldl' (\counter index availability -> if BF.get bf (fromIntegral index)
             then counter
             else case counter of
               orig@(Just (_, a)) -> if availability > a
