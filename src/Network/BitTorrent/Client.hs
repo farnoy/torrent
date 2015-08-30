@@ -36,7 +36,6 @@ import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 import qualified Network.BitTorrent.BitField as BF
-import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
 import Network.BitTorrent.PWP
@@ -46,10 +45,9 @@ import Network.Socket
 import System.FilePath
 import System.IO
 
-newPeer :: Word32 -> SockAddr -> ByteString -> IO PeerData
-newPeer pieceCount addr peer = do
-  c <- newChan
-  return $ PeerData True False True False addr peer (BF.newBitField pieceCount) c 0
+newPeer :: Word32 -> SockAddr -> ByteString -> Handle -> IO PeerData
+newPeer pieceCount addr peer handle =
+  return $ PeerData True False True False addr peer (BF.newBitField pieceCount) 0 handle
 {-# INLINABLE newPeer #-}
 
 newClientState :: FilePath -> MetaInfo -> Word16 -> IO ClientState
@@ -66,9 +64,9 @@ newClientState dir meta listenPort = do
     print bf
     threadDelay 5000000
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
-  outChan <- FW.operate outHandle
   avData <- newTVarIO $ VS.replicate numPieces 0
-  return $ ClientState peers peer meta bit_field chunks outChan listenPort avData
+  mvar <- newMVar ()
+  return $ ClientState peers peer meta bit_field chunks outHandle mvar listenPort avData
 
 btListen :: ClientState -> IO Socket
 btListen state = do
@@ -94,15 +92,13 @@ startFromPeerHandshake state sock addr = do
 
   when cond $ do
     writeHandshake handle state
-    pData <- newPeer pieceCount addr peer
+    pData <- newPeer pieceCount addr peer handle
     atomically $ setPeer peer pData state
-
-    forkIO $ peerEchoer (chan pData) handle
 
     bf <- atomically $
       readTVar (bitField state)
 
-    writeChan (chan pData) $ Bitfield (BF.raw bf)
+    runTorrent state peer (emit $ Bitfield (BF.raw bf))
 
     mainPeerLoop state peer nextInput
 
@@ -115,11 +111,9 @@ reachOutToPeer state addr = do
   writeHandshake handle state
   (nextInput, BHandshake _ peer) <- readHandshake handle
 
-  pd <- newPeer (fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state)
-                addr peer
-  atomically $
-    modifyTVar' (statePeers state) (Map.insert peer pd)
-  forkIO $ peerEchoer (chan pd) handle
+  let pieceCount = fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state
+  pd <- newPeer pieceCount addr peer handle
+  atomically $ setPeer peer pd state
 
   mainPeerLoop state peer nextInput
 

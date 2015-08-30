@@ -13,6 +13,7 @@ import Data.Binary.Get
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BC
+import Data.Functor
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Monoid
@@ -70,13 +71,10 @@ withSetup f = do
   bracket (do
     generated <- sample' (choose (6882 :: Word16, 15000))
     let ports = fromIntegral <$> generated
-    peer  <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890"
-    peer2 <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210"
-    let meta = testMeta
-    state <- newClientState outDir meta (fromIntegral $ ports !! 2)
-    let peers = Map.fromList [(peerId peer, peer), (peerId peer2, peer2)]
-    -- atomically $ writeTVar (statePeers state) peers
-    return (peer, peer2, state, meta)) (\_ -> do
+    peer  <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890" stdout
+    peer2 <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210" stdout
+    state <- newClientState outDir testMeta (fromIntegral $ ports !! 2)
+    return (peer, peer2, state, testMeta)) (\_ -> do
       removeDirectoryRecursive outDir
     )
     f
@@ -195,16 +193,14 @@ spec = do
           hClose handle
           removeFile path) (\(path, handle) -> do
           B.hPut handle testData
-          chan <- FW.operate handle
-          let state' = state { outputChan = chan }
           atomically $
-            writeTVar (bitField state') fullBitField
+            writeTVar (bitField state) fullBitField
 
-          peer <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state') $ myPeerId state
+          let addr = testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state
+          void $ btListen state
 
-          sock <- btListen state'
+          promise <- async $ reachOutToPeer state2 addr
 
-          promise <- async $ reachOutToPeer state2 (address peer)
           res <- timeout 1000000 $ atomically $ do
             bitField <- readTVar (bitField state2)
             if bitField == fullBitField

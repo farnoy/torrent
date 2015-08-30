@@ -11,9 +11,9 @@ import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
 import qualified Network.BitTorrent.PeerSelection as PS
-import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.Socket
+import System.IO
 
 maxRequestsPerPeer :: Word8
 maxRequestsPerPeer = 3
@@ -26,8 +26,8 @@ data PeerData = PeerData {
 , address :: SockAddr
 , peerId :: ByteString
 , peerBitField :: BitField
-, chan :: Chan PWP
 , requestsLive :: Word8
+, handle :: Handle
 }
 
 data ClientState = ClientState {
@@ -36,7 +36,8 @@ data ClientState = ClientState {
 , metaInfo :: MetaInfo
 , bitField :: TVar BitField
 , pieceChunks :: TVar (Map Word32 (ChunkField, ByteString))
-, outputChan :: Chan FW.Operation
+, outputHandle :: Handle
+, outputLock :: MVar ()
 , ourPort :: Word16
 , availabilityData :: TVar PS.AvailabilityData
 }
