@@ -21,6 +21,7 @@ import Data.Binary
 import Data.Binary.Get
 import qualified Data.Attoparsec.ByteString.Char8 as AC
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
@@ -83,7 +84,7 @@ btListen state = do
 startFromPeerHandshake :: ClientState -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
-  (rest, BHandshake hisInfoHash peer) <- readHandshake handle
+  (nextInput, BHandshake hisInfoHash peer) <- readHandshake handle
 
   ourPeers <- atomically $ readTVar (statePeers state)
 
@@ -103,7 +104,7 @@ startFromPeerHandshake state sock addr = do
 
     writeChan (chan pData) $ Bitfield (BF.raw bf)
 
-    mainPeerLoop state peer handle $ runGetIncremental get `pushChunk` rest
+    mainPeerLoop state peer nextInput
 
 reachOutToPeer :: ClientState -> SockAddr -> IO ()
 reachOutToPeer state addr = do
@@ -120,24 +121,21 @@ reachOutToPeer state addr = do
     modifyTVar' (statePeers state) (Map.insert peer pd)
   forkIO $ peerEchoer (chan pd) handle
 
-  mainPeerLoop state peer handle $ runGetIncremental get `pushChunk` nextInput
+  mainPeerLoop state peer nextInput
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
   where handshake = encode $ BHandshake (infoHash . metaInfo $ state) (myPeerId state)
 {-# INLINABLE writeHandshake #-}
 
-readHandshake :: Handle -> IO (ByteString, BHandshake)
-readHandshake handle = evaluator (runGetIncremental get)
-  where evaluator Fail{} = do
-          putStrLn "getHandshake: Their handshake is a phail"
-          error "getHandshake: Their handshake is a phail"
-        evaluator parser@(Partial _) = do
-          hWaitForInput handle (-1)
-          input <- B.hGetSome handle 1024
-          evaluator $ parser `pushChunk` input
-        evaluator (Done unused _ handshake) =
-          return (unused `seq` handshake `seq` (unused, handshake))
+readHandshake :: Handle -> IO (BL.ByteString, BHandshake)
+readHandshake handle = do
+  input <- BL.hGetContents handle
+  case runGetOrFail get input of
+    Left _ ->
+      error "getHandshake: Their handshake is a phail"
+    Right (unused, _, handshake) ->
+      return (unused, handshake)
 {-# INLINABLE readHandshake #-}
 
 peerEchoer :: Chan PWP -> Handle -> IO ()
@@ -145,24 +143,14 @@ peerEchoer c h = forever $ do
   msg <- readChan c
   BL.hPut h $ encode msg
 
-mainPeerLoop :: ClientState -> ByteString -> Handle -> Decoder PWP -> IO ()
-mainPeerLoop state peer handle parser =
-  case parser of
-    Fail _ _ err -> do
-      putStrLn "mainPeerLoop fail parse"
-      putStrLn err
-    Partial _ -> do
-      -- this improves test performance *greatly*
-      -- for some reason we can read absolutely nothing
-      -- many times in a row from local
-      -- sockets with hGetSome
-      {-# SCC "waiting-on-input" #-} hWaitForInput handle (-1)
-      input <- B.hGetSome handle 1024
-      mainPeerLoop state peer handle (parser `pushChunk` input)
-    Done unused _ msg -> do
+mainPeerLoop :: ClientState -> ByteString -> BL.ByteString -> IO ()
+mainPeerLoop state peer input =
+  case runGetOrFail get input of
+    Left _ ->
+      error "mainPeerLoop parse fail"
+    Right (rest, _, msg) -> do
       handleMessage state peer msg
-      let replacementParser = runGetIncremental get `pushChunk` unused
-      mainPeerLoop state peer handle replacementParser
+      mainPeerLoop state peer rest
 
 setPeer :: ByteString -> PeerData -> ClientState -> STM ()
 setPeer peer peerData state = modifyTVar' (statePeers state) (Map.insert peer peerData)

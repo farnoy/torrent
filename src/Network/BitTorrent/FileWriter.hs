@@ -27,4 +27,3 @@ perform handle (ReadBlock offset size action) = do
 perform handle (WriteBlock offset block) = do
   hSeek handle AbsoluteSeek (fromIntegral offset)
   B.hPut handle block
-  hFlush handle
