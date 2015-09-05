@@ -62,9 +62,9 @@ modifyBitfield :: (BF.BitField -> BF.BitField) -> Free TorrentSTM ()
 modifyBitfield mut = liftF $ ModifyBitfield mut ()
 {-# INLINABLE modifyBitfield #-}
 
-readAvailability :: Free TorrentSTM AvailabilityData
-readAvailability = liftF $ ReadAvailability id
-{-# INLINABLE readAvailability #-}
+getAvailability :: Free TorrentSTM AvailabilityData
+getAvailability = liftF $ ReadAvailability id
+{-# INLINABLE getAvailability #-}
 
 modifyAvailability :: (AvailabilityData -> AvailabilityData) -> Free TorrentSTM ()
 modifyAvailability mut = liftF $ ModifyAvailability mut ()
@@ -94,9 +94,7 @@ runTorrentSTM state (Free (ModifyAvailability mut next)) = do
   modifyTVar' (availabilityData state) mut
   runTorrentSTM state next
 
-data TorrentM a = ProcessPiece Word32 a
-                | RequestNextPiece a
-                | forall b. RunSTM (Free TorrentSTM b) (b -> a)
+data TorrentM a = forall b. RunSTM (Free TorrentSTM b) (b -> a)
                 | GetPeerData (PeerData -> a)
                 | Emit PWP a
                 | GetMeta (MetaInfo -> a)
@@ -104,18 +102,12 @@ data TorrentM a = ProcessPiece Word32 a
                 | WriteData Word32 ByteString a
 
 instance Functor TorrentM where
-  fmap f (ProcessPiece a next) = ProcessPiece a (f next)
-  fmap f (RequestNextPiece next) = RequestNextPiece (f next)
   fmap f (RunSTM action next) = RunSTM action (fmap f next)
   fmap f (GetPeerData next) = GetPeerData (fmap f next)
   fmap f (Emit pwp next) = Emit pwp (f next)
   fmap f (GetMeta next) = GetMeta (fmap f next)
   fmap f (ReadData o l next) = ReadData o l (fmap f next)
   fmap f (WriteData o b next) = WriteData o b (f next)
-
-requestNextPiece :: Free TorrentM ()
-requestNextPiece = liftF $ RequestNextPiece ()
-{-# INLINABLE requestNextPiece #-}
 
 peerUnchoked :: Free TorrentM ()
 peerUnchoked = do
@@ -163,104 +155,6 @@ runTorrent state peerHash t = do
 
 evalTorrent :: ClientState -> PeerData -> Free TorrentM a -> IO a
 evalTorrent _ _ (Pure a) = return a
-evalTorrent state peerData (Free (ProcessPiece ix t)) = do
-  Just (chunkField, d) <- evalTorrent state peerData (runSTM (Map.lookup ix <$> getChunks))
-  when (CF.isCompleted chunkField) $ do
-    let infoDict = info $ metaInfo state
-        pieces' = pieces infoDict
-        defaultPieceLen = pieceLength $ info $ metaInfo state
-        getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
-        hashCheck = hash d == getPieceHash ix
-
-    unless hashCheck $ do
-      print $ "Validating hashes " <> show hashCheck
-      print ix
-
-    wasSetAlready <- atomically $ do
-      modifyTVar' (pieceChunks state) (Map.delete ix)
-      if hashCheck
-        then do
-          bf <- readTVar (bitField state)
-          let wasSetAlready = BF.get bf ix
-          unless wasSetAlready $
-            modifyTVar' (bitField state) (\bf' -> BF.set bf' ix True)
-          return wasSetAlready
-        else return False
-      -- because we remove the entry from (pieceChunks state),
-      -- but not indicate it as downloaded in the bitField,
-      -- it will be reacquired again
-
-    when (hashCheck && not wasSetAlready) $
-      evalTorrent state peerData (writeData (defaultPieceLen * ix) d)
-
-  evalTorrent state peerData t
-evalTorrent state peerData (Free (RequestNextPiece t)) = do
-  unless (peerChoking peerData) $ do
-    (chunks, bf, avData) <- atomically $ do
-      chunks <- readTVar (pieceChunks state)
-      avData <- readTVar (availabilityData state)
-      bf <- readTVar (bitField state)
-      return (chunks, bf, avData)
-    let peer = peerId peerData
-        pbf = peerBitField peerData
-    let defaultPieceLen :: Word32
-        defaultPieceLen = pieceLength $ info $ metaInfo state
-        infoDict = info $ metaInfo state
-        totalSize = Meta.length infoDict
-
-    let lastStage = BF.completed bf > 0.9
-    let bfrequestable = if lastStage
-                          then bf
-                          else Map.foldlWithKey' (\bit ix (cf, _) ->
-                                 if not (BF.get pbf ix) || CF.isRequested cf
-                                   then BF.set bit ix True
-                                   else bit) bf chunks
-
-    let incompletePieces = PS.getIncompletePieces bfrequestable
-
-    nextPiece <- if lastStage
-                   then do
-                     if Prelude.length incompletePieces - 1 > 0
-                       then do
-                         rand <- randomRIO (0, Prelude.length incompletePieces - 1)
-                         return $ Just $ incompletePieces !! rand
-                       else return Nothing
-                   else return $ PS.getNextPiece bfrequestable avData
-
-    case nextPiece of
-      Nothing -> return () -- putStrLn "we have all dem pieces"
-      Just ix -> do
-        let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
-        case Map.lookup ix chunks of
-          Just (chunkField, chunkData) -> do
-            let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
-            nextChunk <- if lastStage
-                        then do
-                          rand <- randomRIO (0, Prelude.length incomplete - 1)
-                          return $ Just (cf, incomplete !! rand)
-                        else return $ CF.getNextChunk chunkField
-            case nextChunk of
-              Just (chunkField', cix) -> do
-                let nextChunkSize = expectedChunkSize totalSize ix (cix+1) pieceLen defaultChunkSize
-                    request = Request ix (cix * defaultChunkSize) nextChunkSize
-                    modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-                -- putStrLn $ "requesting " <> show request
-                atomically $ runTorrentSTM state $ do
-                  setPeer peer modifiedPeer
-                  modifyChunks (Map.insert ix (chunkField', chunkData))
-                evalTorrent state peerData (emit request)
-                when (requestsLive modifiedPeer < maxRequestsPerPeer) $
-                  runTorrent state peer requestNextPiece
-              _ -> runTorrent state peer (processPiece ix >> requestNextPiece)
-          Nothing -> do
-            let chunksCount = chunksInPieces pieceLen defaultChunkSize
-                chunkData = B.replicate (fromIntegral pieceLen) 0
-                insertion = (CF.newChunkField chunksCount, chunkData)
-            atomically $ runTorrentSTM state $
-              modifyChunks $ Map.insert ix insertion
-            runTorrent state peer requestNextPiece
-
-  evalTorrent state peerData t
 evalTorrent state peerData (Free (RunSTM a next)) = do
   res <- atomically $ runTorrentSTM state a
   runTorrent state (peerId peerData) (next res)
@@ -377,6 +271,75 @@ handleInterested = do
     let peer = peerId peerData
     runSTM $ setPeer peer peerData'
 {-# INLINABLE handleInterested #-}
+
+requestNextPiece :: Free TorrentM ()
+requestNextPiece = do
+  peerData <- getPeerData
+  unless (peerChoking peerData) $ do
+    (chunks, bf, avData) <- runSTM $ do
+      chunks <- getChunks
+      avData <- getAvailability
+      bf <- getBitfield
+      return (chunks, bf, avData)
+    meta <- getMeta
+    let peer = peerId peerData
+        pbf = peerBitField peerData
+        infoDict = info meta
+        defaultPieceLen :: Word32
+        defaultPieceLen = pieceLength infoDict
+        totalSize = Meta.length infoDict
+
+        lastStage = BF.completed bf > 0.9
+        bfrequestable = if lastStage
+                          then bf
+                          else Map.foldlWithKey' (\bit ix (cf, _) ->
+                                 if not (BF.get pbf ix) || CF.isRequested cf
+                                   then BF.set bit ix True
+                                   else bit) bf chunks
+
+        incompletePieces = PS.getIncompletePieces bfrequestable
+
+    nextPiece <- if lastStage
+                   then do
+                     if Prelude.length incompletePieces - 1 > 0
+                       then return $ unsafePerformIO $ do
+                         rand <- randomRIO (0, Prelude.length incompletePieces - 1)
+                         return $ Just $ incompletePieces !! rand
+                       else return Nothing
+                   else return $ PS.getNextPiece bfrequestable avData
+
+    case nextPiece of
+      Nothing -> return () -- putStrLn "we have all dem pieces"
+      Just ix -> do
+        let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
+        case Map.lookup ix chunks of
+          Just (chunkField, chunkData) -> do
+            let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
+            nextChunk <- if lastStage
+                        then return $ unsafePerformIO $ do
+                          rand <- randomRIO (0, Prelude.length incomplete - 1)
+                          return $ Just (cf, incomplete !! rand)
+                        else return $ CF.getNextChunk chunkField
+            case nextChunk of
+              Just (chunkField', cix) -> do
+                let nextChunkSize = expectedChunkSize totalSize ix (cix+1) pieceLen defaultChunkSize
+                    request = Request ix (cix * defaultChunkSize) nextChunkSize
+                    modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
+                -- putStrLn $ "requesting " <> show request
+                runSTM  $ do
+                  setPeer peer modifiedPeer
+                  modifyChunks (Map.insert ix (chunkField', chunkData))
+                emit request
+                when (requestsLive modifiedPeer < maxRequestsPerPeer) $
+                  requestNextPiece
+              _ -> processPiece ix >> requestNextPiece
+          Nothing -> do
+            let chunksCount = chunksInPieces pieceLen defaultChunkSize
+                chunkData = B.replicate (fromIntegral pieceLen) 0
+                insertion = (CF.newChunkField chunksCount, chunkData)
+            runSTM $
+              modifyChunks $ Map.insert ix insertion
+            requestNextPiece
 
 handlePWP :: PWP -> Free TorrentM ()
 handlePWP Unchoke = handleUnchoke
