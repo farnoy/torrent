@@ -31,8 +31,7 @@ data PeerData = PeerData {
 }
 
 data ClientState = ClientState {
-  statePeers :: TVar (Map ByteString PeerData)
-, myPeerId :: ByteString
+  myPeerId :: ByteString
 , metaInfo :: MetaInfo
 , bitField :: TVar BitField
 , pieceChunks :: TVar (Map Word32 (ChunkField, ByteString))

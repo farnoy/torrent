@@ -4,21 +4,23 @@
 {-# LANGUAGE DeriveFunctor #-}
 module Network.BitTorrent.PeerMonad (
   runTorrent
-, handlePWP
-, emit
+, entryPoint
 ) where
 
 import Control.Concurrent.STM.TVar
 import Control.Monad
 import Control.Monad.Free
+import Control.Monad.Reader
 import Control.Monad.STM
+import Control.Monad.State.Strict
 import Crypto.Hash.SHA1
-import Data.Binary
+import qualified Data.Binary as Binary
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
+import Data.Foldable (traverse_)
 import Data.Map.Strict as Map
-import Data.Monoid
+import Data.Word
 import Data.Vector.Storable.Mutable as VS
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.ChunkField as CF
@@ -31,11 +33,12 @@ import Network.BitTorrent.Types
 import System.IO.Unsafe
 import System.Random hiding(next)
 
+type PeerMonad = ReaderT ClientState (StateT PeerData IO)
+
 type Chunks = Map Word32 (ChunkField, ByteString)
 
 data TorrentSTM a = GetChunks (Chunks -> a)
                   | ModifyChunks (Chunks -> Chunks) a
-                  | SetPeer ByteString PeerData a
                   | ReadBitfield (BF.BitField -> a)
                   | ModifyBitfield (BF.BitField -> BF.BitField) a
                   | ReadAvailability (AvailabilityData -> a)
@@ -49,10 +52,6 @@ getChunks = liftF $ GetChunks id
 modifyChunks :: (Chunks -> Chunks) -> Free TorrentSTM ()
 modifyChunks mut = liftF $ ModifyChunks mut ()
 {-# INLINABLE modifyChunks #-}
-
-setPeer :: ByteString -> PeerData -> Free TorrentSTM ()
-setPeer peer peerData = liftF $ SetPeer peer peerData ()
-{-# INLINABLE setPeer #-}
 
 getBitfield :: Free TorrentSTM BF.BitField
 getBitfield = liftF $ ReadBitfield id
@@ -78,9 +77,6 @@ runTorrentSTM state (Free (GetChunks f)) = do
 runTorrentSTM state (Free (ModifyChunks f t)) = do
   modifyTVar' (pieceChunks state) f
   runTorrentSTM state t
-runTorrentSTM state (Free (SetPeer peer peerData t)) = do
-  modifyTVar' (statePeers state) (Map.insert peer peerData)
-  runTorrentSTM state t
 runTorrentSTM state (Free (ReadBitfield next)) = do
   res <- readTVar (bitField state)
   runTorrentSTM state (next res)
@@ -100,6 +96,7 @@ data TorrentM a = forall b. RunSTM (Free TorrentSTM b) (b -> a)
                 | GetMeta (MetaInfo -> a)
                 | ReadData Word32 Word32 (ByteString -> a)
                 | WriteData Word32 ByteString a
+                | UpdateState PeerData a
 
 instance Functor TorrentM where
   fmap f (RunSTM action next) = RunSTM action (fmap f next)
@@ -108,14 +105,12 @@ instance Functor TorrentM where
   fmap f (GetMeta next) = GetMeta (fmap f next)
   fmap f (ReadData o l next) = ReadData o l (fmap f next)
   fmap f (WriteData o b next) = WriteData o b (f next)
+  fmap f (UpdateState pData next) = UpdateState pData (f next)
 
 peerUnchoked :: Free TorrentM ()
 peerUnchoked = do
   peerData <- getPeerData
-  let peer = peerId peerData
-      peerData' = peerData { peerChoking = False }
-  runSTM $
-    setPeer peer peerData'
+  updateState $ peerData { peerChoking = False }
 {-# INLINABLE peerUnchoked #-}
 
 runSTM :: Free TorrentSTM a -> Free TorrentM a
@@ -125,10 +120,6 @@ runSTM stm = liftF $ RunSTM stm id
 getPeerData :: Free TorrentM PeerData
 getPeerData = liftF $ GetPeerData id
 {-# INLINABLE getPeerData #-}
-
-getPeerHash :: Free TorrentM ByteString
-getPeerHash = peerId <$> getPeerData
-{-# INLINABLE getPeerHash #-}
 
 emit :: PWP -> Free TorrentM ()
 emit pwp = liftF $ Emit pwp ()
@@ -146,36 +137,46 @@ writeData :: Word32 -> ByteString -> Free TorrentM ()
 writeData o b = liftF $ WriteData o b ()
 {-# INLINABLE writeData #-}
 
-runTorrent :: ClientState -> ByteString -> Free TorrentM a -> IO a
-runTorrent state peerHash t = do
-  Just peerData <- atomically $
-    Map.lookup peerHash <$> readTVar (statePeers state)
-  evalTorrent state peerData t
+updateState :: PeerData -> Free TorrentM ()
+updateState pData = liftF $ UpdateState pData ()
+
+runTorrent :: ClientState -> PeerData -> Free TorrentM a -> IO a
+runTorrent state pData t =
+  evalStateT (runReaderT (evalTorrent t) state) pData
 {-# INLINABLE runTorrent #-}
 
-evalTorrent :: ClientState -> PeerData -> Free TorrentM a -> IO a
-evalTorrent _ _ (Pure a) = return a
-evalTorrent state peerData (Free (RunSTM a next)) = do
-  res <- atomically $ runTorrentSTM state a
-  runTorrent state (peerId peerData) (next res)
-evalTorrent state peerData (Free (GetPeerData next)) = do
-  evalTorrent state peerData (next peerData)
-evalTorrent state peerData (Free (Emit pwp next)) = do
-  BL.hPut (handle peerData) (encode pwp)
-  evalTorrent state peerData next
-evalTorrent state peerData (Free (GetMeta next)) = do
-  let res = metaInfo state
-  evalTorrent state peerData (next res)
-evalTorrent state peerData (Free (ReadData o l next)) = do
+
+evalTorrent :: Free TorrentM a -> PeerMonad a
+evalTorrent (Pure a) = return a
+evalTorrent (Free (RunSTM a next)) = do
+  state <- ask
+  res <- liftIO $ atomically $ runTorrentSTM state a
+  evalTorrent (next res)
+evalTorrent (Free (GetPeerData next)) = do
+  pData <- get
+  evalTorrent $ next pData
+evalTorrent (Free (Emit pwp next)) = do
+  pData <- get
+  liftIO $ BL.hPut (handle pData) (Binary.encode pwp)
+  evalTorrent next
+evalTorrent (Free (GetMeta next)) = do
+  meta <- metaInfo <$> ask
+  evalTorrent (next meta)
+evalTorrent (Free (ReadData o l next)) = do
+  state <- ask
   let hdl = outputHandle state
       lock = outputLock state
-  a <- FW.read hdl lock o l
-  evalTorrent state peerData (next a)
-evalTorrent state peerData (Free (WriteData o d next)) = do
+  a <- liftIO $ FW.read hdl lock o l
+  evalTorrent (next a)
+evalTorrent (Free (WriteData o d next)) = do
+  state <- ask
   let hdl = outputHandle state
       lock = outputLock state
-  FW.write hdl lock o d
-  evalTorrent state peerData next
+  liftIO $ FW.write hdl lock o d
+  evalTorrent next
+evalTorrent (Free (UpdateState pData next)) = do
+  put pData
+  evalTorrent next
 
 handleUnchoke :: Free TorrentM ()
 handleUnchoke = peerUnchoked >> requestNextPiece
@@ -240,27 +241,23 @@ processPiece ix = do
 handleBitfield :: ByteString -> Free TorrentM ()
 handleBitfield field = do
   peerData <- getPeerData
-  runSTM $ do
+  newBitField <- runSTM $ do
     len <- BF.length <$> getBitfield
     let newBitField = BF.BitField field len
-        peer = peerId peerData
-        peerData' = peerData { peerBitField = newBitField }
-    setPeer peer peerData'
     modifyAvailability $ PS.addToAvailability newBitField
+    return newBitField
+  updateState $ peerData { peerBitField = newBitField }
   emit Interested
-{-# INLINABLE handleBitfield #-}
 
 handleHave :: Word32 -> Free TorrentM ()
 handleHave ix = do
   peerData <- getPeerData
   let peerData' = peerData { peerBitField = BF.set (peerBitField peerData) ix True }
-      peer = peerId peerData
   runSTM $ do
-    setPeer peer peerData'
     let oldBf = peerBitField peerData
         newBf = peerBitField peerData'
     modifyAvailability $ PS.addToAvailability newBf . PS.removeFromAvailability oldBf
-{-# INLINABLE handleHave #-}
+  updateState peerData'
 
 handleInterested :: Free TorrentM ()
 handleInterested = do
@@ -268,9 +265,7 @@ handleInterested = do
   when (amChoking peerData) $ do
     emit Unchoke
     let peerData' = peerData { amChoking = False }
-    let peer = peerId peerData
-    runSTM $ setPeer peer peerData'
-{-# INLINABLE handleInterested #-}
+    updateState peerData'
 
 requestNextPiece :: Free TorrentM ()
 requestNextPiece = do
@@ -282,14 +277,13 @@ requestNextPiece = do
       bf <- getBitfield
       return (chunks, bf, avData)
     meta <- getMeta
-    let peer = peerId peerData
-        pbf = peerBitField peerData
+    let pbf = peerBitField peerData
         infoDict = info meta
         defaultPieceLen :: Word32
         defaultPieceLen = pieceLength infoDict
         totalSize = Meta.length infoDict
 
-        lastStage = BF.completed bf > 0.9
+        lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
         bfrequestable = if lastStage
                           then bf
                           else Map.foldlWithKey' (\bit ix (cf, _) ->
@@ -327,8 +321,8 @@ requestNextPiece = do
                     modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
                 -- putStrLn $ "requesting " <> show request
                 runSTM  $ do
-                  setPeer peer modifiedPeer
                   modifyChunks (Map.insert ix (chunkField', chunkData))
+                updateState modifiedPeer
                 emit request
                 when (requestsLive modifiedPeer < maxRequestsPerPeer) $
                   requestNextPiece
@@ -356,3 +350,6 @@ handlePWP (Request ix offset len) = do
     block <- readData (ix * defaultPieceLen + offset) len
     emit (Piece ix offset block)
 handlePWP _ = return () -- logging?
+
+entryPoint :: [PWP] -> Free TorrentM ()
+entryPoint messages = traverse_ handlePWP  messages

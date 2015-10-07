@@ -27,7 +27,7 @@ library
                  , Network.BitTorrent.ChunkField
                  , Network.BitTorrent.Types
                  , Network.BitTorrent.PeerMonad
-  ghc-options:   -Wall -O -fprof-auto
+  ghc-options:   -Wall -O -fprof-auto -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
                  , attoparsec
                  , binary
@@ -41,6 +41,7 @@ library
                  , http-types
                  , ieee754
                  , lens-family
+                 , mtl
                  , network
                  , pretty-hex
                  , random

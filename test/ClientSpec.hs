@@ -128,6 +128,7 @@ setupSocket peer messages = do
 
 spec :: SpecWith ()
 spec = do
+{-
   it "updates the peer's bitfield" $ withSetup $ \(peer, peer2, state, meta) -> do
     let someData = BL.toStrict $ BL.take pieceCount $ BL.cycle $ BL.pack $
                    fromIntegral <$> [readBinary "11011010", readBinary "00101000"]
@@ -154,6 +155,7 @@ spec = do
     print pieceCount
 
     res `shouldBe` Just True
+    -}
 
   it "handshakes properly" $ withSetup $ \(peer, peer2, state, meta) -> do
     promise <- setupSocket peer
@@ -164,6 +166,7 @@ spec = do
     result <- wait promise
     result `shouldBe` True
 
+  {-
   it "handles HAVE messages properly" $ withSetup $ \(peer, peer2, state, meta) -> do
     let newBitField = BF.set fullBitField 7 False
     promise <- setupSocket peer
@@ -182,6 +185,7 @@ spec = do
         Just p | BF.get (peerBitField p) 7 -> return True
         _ -> retry
     (res1, res2) `shouldBe` (Just True, Just True)
+  -}
 
 
   it "can seed itself" $
@@ -196,8 +200,9 @@ spec = do
           atomically $
             writeTVar (bitField state) fullBitField
 
-          let addr = testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state
-          void $ btListen state
+          let state' = state { outputHandle = handle }
+              addr = testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state'
+          void $ btListen state'
 
           promise <- async $ reachOutToPeer state2 addr
 

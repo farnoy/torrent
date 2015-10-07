@@ -52,7 +52,6 @@ newPeer pieceCount addr peer handle =
 
 newClientState :: FilePath -> MetaInfo -> Word16 -> IO ClientState
 newClientState dir meta listenPort = do
-  peers <- newTVarIO Map.empty
   chunks <- newTVarIO Map.empty
   uuid <- nextRandom
   let peer = hash $ toASCIIBytes uuid
@@ -66,7 +65,7 @@ newClientState dir meta listenPort = do
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
   avData <- newTVarIO $ VS.replicate numPieces 0
   mvar <- newMVar ()
-  return $ ClientState peers peer meta bit_field chunks outHandle mvar listenPort avData
+  return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData
 
 btListen :: ClientState -> IO Socket
 btListen state = do
@@ -84,23 +83,22 @@ startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
   (nextInput, BHandshake hisInfoHash peer) <- readHandshake handle
 
-  ourPeers <- atomically $ readTVar (statePeers state)
 
   let ourInfoHash = infoHash $ metaInfo state
-      cond = hisInfoHash == ourInfoHash && Map.notMember peer ourPeers
+      cond = hisInfoHash == ourInfoHash
+      -- && Map.notMember peer ourPeers -- for later
       pieceCount = fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state
 
   when cond $ do
     writeHandshake handle state
     pData <- newPeer pieceCount addr peer handle
-    atomically $ setPeer peer pData state
 
     bf <- atomically $
       readTVar (bitField state)
 
-    runTorrent state peer (emit $ Bitfield (BF.raw bf))
+    BL.hPut handle (encode $ Bitfield $ BF.raw bf)
 
-    mainPeerLoop state peer nextInput
+    mainPeerLoop state pData nextInput
 
 reachOutToPeer :: ClientState -> SockAddr -> IO ()
 reachOutToPeer state addr = do
@@ -113,9 +111,8 @@ reachOutToPeer state addr = do
 
   let pieceCount = fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state
   pd <- newPeer pieceCount addr peer handle
-  atomically $ setPeer peer pd state
 
-  mainPeerLoop state peer nextInput
+  mainPeerLoop state pd nextInput
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
@@ -137,21 +134,15 @@ peerEchoer c h = forever $ do
   msg <- readChan c
   BL.hPut h $ encode msg
 
-mainPeerLoop :: ClientState -> ByteString -> BL.ByteString -> IO ()
-mainPeerLoop state peer input =
+mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> IO ()
+mainPeerLoop state pData input =
+  runTorrent state pData (entryPoint $ messageStream input)
+
+messageStream :: BL.ByteString -> [PWP]
+messageStream input =
   case runGetOrFail get input of
-    Left _ ->
-      error "mainPeerLoop parse fail"
-    Right (rest, _, msg) -> do
-      handleMessage state peer msg
-      mainPeerLoop state peer rest
-
-setPeer :: ByteString -> PeerData -> ClientState -> STM ()
-setPeer peer peerData state = modifyTVar' (statePeers state) (Map.insert peer peerData)
-{-# INLINABLE setPeer #-}
-
-handleMessage :: ClientState -> ByteString -> PWP -> IO ()
-handleMessage state peer = runTorrent state peer . handlePWP
+    Left _ -> []
+    Right (rest, _, msg) -> msg : messageStream rest
 
 queryTracker :: ClientState -> IO ()
 queryTracker state = do
