@@ -17,7 +17,6 @@ import Data.Functor
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Monoid
-import Hexdump
 import Language.Literals.Binary
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.Bencoding

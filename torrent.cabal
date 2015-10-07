@@ -43,10 +43,7 @@ library
                  , lens-family
                  , mtl
                  , network
-                 , pretty-hex
                  , random
-                 , random-extras
-                 , random-fu
                  , stm
                  , unordered-containers
                  , uuid
@@ -67,9 +64,6 @@ executable torrent
                      , http-types
                      , lens-family
                      , network
-                     , pretty-hex
-                     , random-extras
-                     , random-fu
                      , torrent
                      , unordered-containers
                      , uuid
@@ -106,9 +100,6 @@ test-suite torrent-test
                      , lens-family
                      , network
                      , random
-                     , random-extras
-                     , random-fu
-                     , pretty-hex
                      , stm
                      , torrent
                      , unordered-containers

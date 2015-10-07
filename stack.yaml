@@ -2,7 +2,5 @@ flags:
 packages:
 - '.'
 extra-deps:
-  - pretty-hex-1.0
   - binary-literal-qq-1.0
-  - random-extras-0.19
 resolver: lts-3.2
