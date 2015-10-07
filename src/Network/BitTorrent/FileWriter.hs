@@ -10,17 +10,16 @@ import Data.Word
 import System.IO
 
 read :: Handle -> MVar () -> Word32 -> Word32 -> IO ByteString
-read hdl mvar offset size = go `finally` putMVar mvar ()
+read hdl mvar offset size = withMVar mvar (const go)
   where go = do
-          takeMVar mvar
           hSeek hdl AbsoluteSeek (fromIntegral offset)
           B.hGet hdl (fromIntegral size)
+
 {-# INLINABLE read #-}
 
 write :: Handle -> MVar () -> Word32 -> ByteString -> IO ()
-write hdl mvar offset block = go `finally` putMVar mvar ()
+write hdl mvar offset block = withMVar mvar (const go)
   where go = do
-          takeMVar mvar
           hSeek hdl AbsoluteSeek (fromIntegral offset)
           B.hPut hdl block
 {-# INLINABLE write #-}
