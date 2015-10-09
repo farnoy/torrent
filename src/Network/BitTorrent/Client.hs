@@ -149,9 +149,12 @@ queryTracker state = do
   let meta = metaInfo state
   let url = fromByteString (announce meta) >>= parseUrl
   let req = setQueryString [ ("peer_id", Just (myPeerId state))
-                           , ("info_hash", Just . infoHash $ meta)
+                           , ("info_hash", Just (infoHash meta))
                            , ("compact", Just "1")
                            , ("port", Just "8035")
+                           , ("uploaded", Just "0")
+                           , ("downloaded", Just "0")
+                           , ("left", Just (BC.pack $ show $ Meta.length $ info meta))
                            ] (fromJust url)
 
   putStrLn "pieceCount"
