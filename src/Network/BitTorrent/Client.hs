@@ -139,7 +139,7 @@ readHandshake input = do
 
 mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> Handle -> IO ()
 mainPeerLoop state pData input handle =
-  runTorrent state pData (messageStream input) handle entryPoint
+  runPeerMonad state pData (messageStream input) handle entryPoint
 
 messageStream :: BL.ByteString -> [PWP]
 messageStream input =
