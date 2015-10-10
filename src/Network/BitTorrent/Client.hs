@@ -136,7 +136,7 @@ peerEchoer c h = forever $ do
 
 mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> IO ()
 mainPeerLoop state pData input =
-  runTorrent state pData (entryPoint $ messageStream input)
+  runTorrent state pData (messageStream input) entryPoint
 
 messageStream :: BL.ByteString -> [PWP]
 messageStream input =
