@@ -15,7 +15,7 @@ import Network.Socket
 import System.IO
 
 maxRequestsPerPeer :: Word8
-maxRequestsPerPeer = 3
+maxRequestsPerPeer = 8
 
 data PeerData = PeerData {
   amChoking :: Bool
