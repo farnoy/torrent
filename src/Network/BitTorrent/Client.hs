@@ -4,6 +4,7 @@ module Network.BitTorrent.Client (
   newClientState
 , newPeer
 , btListen
+, globalPort
 , queryTracker
 , PeerData(..)
 , ClientState(..)
@@ -44,9 +45,12 @@ import Network.Socket
 import System.FilePath
 import System.IO
 
-newPeer :: Word32 -> SockAddr -> ByteString -> Handle -> IO PeerData
-newPeer pieceCount addr peer handle =
-  return $ PeerData True False True False addr peer (BF.newBitField pieceCount) 0 handle
+globalPort :: Word16
+globalPort = 8035
+
+newPeer :: BF.BitField -> SockAddr -> ByteString -> PeerData
+newPeer bf addr peer =
+  PeerData True False True False addr peer bf 0
 {-# INLINABLE newPeer #-}
 
 newClientState :: FilePath -> MetaInfo -> Word16 -> IO ClientState
@@ -81,57 +85,61 @@ btListen state = do
 startFromPeerHandshake :: ClientState -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
-  (nextInput, BHandshake hisInfoHash peer) <- readHandshake handle
+  input <- BL.hGetContents handle
+  let Just (nextInput, BHandshake hisInfoHash peer) = readHandshake input
 
 
   let ourInfoHash = infoHash $ metaInfo state
       cond = hisInfoHash == ourInfoHash
       -- && Map.notMember peer ourPeers -- for later
-      pieceCount = fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state
+      bf = BF.newBitField (pieceCount state)
 
   when cond $ do
     writeHandshake handle state
-    pData <- newPeer pieceCount addr peer handle
+    let pData = newPeer bf addr peer
 
     bf <- atomically $
       readTVar (bitField state)
 
     BL.hPut handle (encode $ Bitfield $ BF.raw bf)
 
-    mainPeerLoop state pData nextInput
+    mainPeerLoop state pData nextInput handle
+
+pieceCount :: ClientState -> Word32
+pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
 
 reachOutToPeer :: ClientState -> SockAddr -> IO ()
 reachOutToPeer state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
   handle <- socketToHandle sock ReadWriteMode
+  input <- BL.hGetContents handle
 
   writeHandshake handle state
-  (nextInput, BHandshake _ peer) <- readHandshake handle
+  let Just (nextInput, BHandshake hisInfoHash hisId) = readHandshake input
+      ourInfoHash = infoHash $ metaInfo state
+      bitField = BF.newBitField (pieceCount state)
 
-  let pieceCount = fromIntegral $ (`quot` 20) $ B.length $ pieces $ info $ metaInfo state
-  pd <- newPeer pieceCount addr peer handle
-
-  mainPeerLoop state pd nextInput
+  when (hisInfoHash == ourInfoHash) $ do
+    let pData = newPeer bitField addr hisId
+    mainPeerLoop state pData nextInput handle
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
   where handshake = encode $ BHandshake (infoHash . metaInfo $ state) (myPeerId state)
 {-# INLINABLE writeHandshake #-}
 
-readHandshake :: Handle -> IO (BL.ByteString, BHandshake)
-readHandshake handle = do
-  input <- BL.hGetContents handle
+readHandshake :: BL.ByteString -> Maybe (BL.ByteString, BHandshake)
+readHandshake input = do
   case runGetOrFail get input of
-    Left _ ->
-      error "getHandshake: Their handshake is a phail"
+    Left _ -> Nothing -- the handshake is wrong/unsupported
     Right (unused, _, handshake) ->
-      return (unused, handshake)
+      Just (unused, handshake)
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> IO ()
-mainPeerLoop state pData input =
-  runTorrent state pData (messageStream input) entryPoint
+mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> Handle -> IO ()
+mainPeerLoop state pData input handle =
+  runTorrent state pData (messageStream input) handle entryPoint
 
 messageStream :: BL.ByteString -> [PWP]
 messageStream input =
@@ -146,7 +154,7 @@ queryTracker state = do
       req = setQueryString [ ("peer_id", Just (myPeerId state))
                            , ("info_hash", Just (infoHash meta))
                            , ("compact", Just "1")
-                           , ("port", Just "8035")
+                           , ("port", Just (BC.pack $ show globalPort))
                            , ("uploaded", Just "0")
                            , ("downloaded", Just "0")
                            , ("left", Just (BC.pack $ show $ Meta.length $ info meta))

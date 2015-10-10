@@ -26,7 +26,6 @@ data PeerData = PeerData {
 , peerId :: ByteString
 , peerBitField :: BitField
 , requestsLive :: Word8
-, handle :: Handle
 }
 
 data ClientState = ClientState {

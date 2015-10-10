@@ -31,11 +31,13 @@ import Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
+import System.IO
 import System.IO.Unsafe
 import System.Random hiding(next)
 
 data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateChan :: Chan PeerEvent
+                           , peerStateHandle :: Handle
                            }
 
 -- TODO Logger
@@ -155,10 +157,10 @@ updateState pData = liftF $ UpdateState pData ()
 getPeerEvent :: F TorrentM PeerEvent
 getPeerEvent = liftF $ GetPeerEvent id
 
-runTorrent :: ClientState -> PeerData -> [PWP] -> F TorrentM a -> IO a
-runTorrent state pData messages t = do
+runTorrent :: ClientState -> PeerData -> [PWP] -> Handle -> F TorrentM a -> IO a
+runTorrent state pData messages outHandle t = do
   chan <- newChan
-  let peerState = PeerState pData chan
+  let peerState = PeerState pData chan outHandle
   void $ forkIO $ traverse_ (writeChan chan . PWPEvent) messages
   sharedChan <- dupChan (sharedMessages state)
   void $ forkIO $ forever $ readChan sharedChan >>= writeChan chan . SharedEvent
@@ -173,11 +175,11 @@ evalTorrent (RunSTM a next) = do
   res <- liftIO $ atomically $ runTorrentSTM state a
   next res
 evalTorrent (GetPeerData next) = do
-  PeerState pData _ <- get
+  PeerState pData _ _ <- get
   next pData
 evalTorrent (Emit pwp next) = do
-  PeerState pData _ <- get
-  liftIO $ BL.hPut (handle pData) (Binary.encode pwp)
+  PeerState pData _ handle <- get
+  liftIO $ BL.hPut handle (Binary.encode pwp)
   next
 evalTorrent (GetMeta next) = do
   meta <- metaInfo <$> ask

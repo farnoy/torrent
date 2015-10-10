@@ -70,8 +70,9 @@ withSetup f = do
   bracket (do
     generated <- sample' (choose (6882 :: Word16, 15000))
     let ports = fromIntegral <$> generated
-    peer  <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890" stdout
-    peer2 <- newPeer pieceCount (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210" stdout
+        bf = BF.newBitField pieceCount
+    let peer = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890"
+    let peer2 = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210"
     state <- newClientState outDir testMeta (fromIntegral $ ports !! 2)
     return (peer, peer2, state, testMeta)) (\_ -> do
       removeDirectoryRecursive outDir

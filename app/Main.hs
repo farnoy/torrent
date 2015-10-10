@@ -23,7 +23,7 @@ main = do
   res <- openTorrentFile $ head args
   case res of
     Just meta -> do
-      clientState <- newClientState "." meta 8035
+      clientState <- newClientState "." meta globalPort
       void $ btListen clientState
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
