@@ -145,11 +145,11 @@ messageStream input =
     Left _ -> []
     Right (rest, _, msg) -> msg : messageStream rest
 
-queryTracker :: ClientState -> IO ()
+queryTracker :: ClientState -> IO [SockAddr]
 queryTracker state = do
   let meta = metaInfo state
-  let url = fromByteString (announce meta) >>= parseUrl
-  let req = setQueryString [ ("peer_id", Just (myPeerId state))
+      url = fromByteString (announce meta) >>= parseUrl
+      req = setQueryString [ ("peer_id", Just (myPeerId state))
                            , ("info_hash", Just (infoHash meta))
                            , ("compact", Just "1")
                            , ("port", Just "8035")
@@ -158,26 +158,17 @@ queryTracker state = do
                            , ("left", Just (BC.pack $ show $ Meta.length $ info meta))
                            ] (fromJust url)
 
-  putStrLn "pieceCount"
-  print $ (`quot`20) $ B.length $ pieces $ info meta
-  avData <- atomically $ readTVar $ availabilityData state
-  print $ VS.length avData
-  putStrLn "pieceLen"
-  print $ pieceLength $ info meta
-
   manager <- newManager defaultManagerSettings
   response <- httpLbs req manager
-  case AC.maybeResult (AC.parse value (BL.toStrict $ responseBody response)) of
-    Just v -> do
-      let peers = getPeers $ BL.fromStrict $ v ^. (bkey "peers" . bstring)
-      _ <- traverse (forkIO . reachOutToPeer state) peers
-      threadDelay 100000000
-    _ -> Prelude.putStrLn "can't parse response"
-{-# INLINABLE queryTracker #-}
+  let body = BL.toStrict $ responseBody response
+  case AC.parseOnly value body of
+    Right v ->
+      return $ getPeers $ BL.fromStrict $ v ^. (bkey "peers" . bstring)
+    _ -> return []
 
 getPeers :: BL.ByteString -> [SockAddr]
 getPeers src | BL.null src = []
-getPeers src = SockAddrInet port' ip : getPeers (BL.drop 6 src)
+getPeers src = SockAddrInet port ip : getPeers (BL.drop 6 src)
                where chunk = BL.take 6 src
                      ipRaw = BL.take 4 chunk
                      ip = runGet getWord32le ipRaw -- source is actually network order,
@@ -185,5 +176,5 @@ getPeers src = SockAddrInet port' ip : getPeers (BL.drop 6 src)
                                                    -- converts in `runGet`
                                                    -- we're avoiding this conversion
                      portSlice = BL.drop 4 chunk
-                     port' = fromIntegral (decode portSlice :: Word16)
+                     port = fromIntegral (decode portSlice :: Word16)
 {-# INLINABLE getPeers #-}
