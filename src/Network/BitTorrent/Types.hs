@@ -1,6 +1,7 @@
 module Network.BitTorrent.Types where
 
 import Control.Concurrent
+import Control.Concurrent.Chan
 import Control.Concurrent.STM.TVar
 import Data.Binary
 import Data.ByteString.Internal as BI
@@ -39,7 +40,10 @@ data ClientState = ClientState {
 , outputLock :: MVar ()
 , ourPort :: Word16
 , availabilityData :: TVar PS.AvailabilityData
+, sharedMessages :: Chan SharedMessage
 }
+
+data SharedMessage = RequestPiece
 
 defaultChunkSize :: Word32
 defaultChunkSize = 2 ^ (16 :: Word32)

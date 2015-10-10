@@ -65,7 +65,8 @@ newClientState dir meta listenPort = do
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
   avData <- newTVarIO $ VS.replicate numPieces 0
   mvar <- newMVar ()
-  return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData
+  sharedMessages <- newChan
+  return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData sharedMessages
 
 btListen :: ClientState -> IO Socket
 btListen state = do

@@ -100,7 +100,7 @@ evalTorrentSTM state (ModifyAvailability mut next) = do
 runTorrentSTM :: ClientState -> F TorrentSTM a -> STM a
 runTorrentSTM state = iterM (evalTorrentSTM state)
 
-data PeerEvent = PWPEvent PWP | ClientEvent
+data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage
 
 data TorrentM a = forall b. RunSTM (F TorrentSTM b) (b -> a)
                 | GetPeerData (PeerData -> a)
@@ -162,6 +162,8 @@ runTorrent state pData messages t = do
   chan <- newChan
   let peerState = PeerState pData chan
   forkIO $ traverse_ (writeChan chan . PWPEvent) messages
+  sharedChan <- dupChan (sharedMessages state)
+  forkIO $ forever $ readChan sharedChan >>= writeChan chan . SharedEvent
   -- TODO: store this threadId for killing later
   evalStateT (runReaderT (inside t) state) peerState
   where inside = iterM evalTorrent
@@ -377,3 +379,4 @@ handlePWP _ = return () -- logging?
 entryPoint :: F TorrentM ()
 entryPoint = forever $ getPeerEvent >>= handler
   where handler (PWPEvent pwp) = handlePWP pwp
+        handler (SharedEvent RequestPiece) = requestNextPiece
