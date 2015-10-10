@@ -7,6 +7,8 @@ module Network.BitTorrent.PeerMonad (
 , entryPoint
 ) where
 
+import Control.Concurrent
+import Control.Concurrent.Chan
 import Control.Concurrent.STM.TVar
 import Control.Monad
 import Control.Monad.Free.Church
@@ -34,7 +36,10 @@ import System.IO
 import System.IO.Unsafe
 import System.Random hiding(next)
 
-data PeerState = PeerState { peerStateData :: PeerData, peerStateMessages :: [PWP] }
+data PeerState = PeerState { peerStateData :: PeerData
+                           , peerStateChan :: Chan PeerEvent
+                           }
+
 -- TODO Logger
 type PeerMonad = ReaderT ClientState (StateT PeerState IO)
 
@@ -154,7 +159,10 @@ getPeerEvent = liftF $ GetPeerEvent id
 
 runTorrent :: ClientState -> PeerData -> [PWP] -> F TorrentM a -> IO a
 runTorrent state pData messages t = do
-  let peerState = PeerState pData messages
+  chan <- newChan
+  let peerState = PeerState pData chan
+  forkIO $ traverse_ (writeChan chan . PWPEvent) messages
+  -- TODO: store this threadId for killing later
   evalStateT (runReaderT (inside t) state) peerState
   where inside = iterM evalTorrent
 {-# INLINABLE runTorrent #-}
@@ -192,8 +200,8 @@ evalTorrent (UpdateState pData next) = do
   next
 evalTorrent (GetPeerEvent next) = do
   pState <- get
-  put $ pState { peerStateMessages = Prelude.tail (peerStateMessages pState) }
-  next . PWPEvent . head . peerStateMessages $ pState
+  msg <- liftIO $ readChan $ peerStateChan pState
+  next msg
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F TorrentM ()
 receiveChunk ix offset d = do
