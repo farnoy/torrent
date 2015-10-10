@@ -3,7 +3,6 @@ module Network.BitTorrent.FileWriter (
 , write) where
 
 import Control.Concurrent
-import Control.Exception
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Word

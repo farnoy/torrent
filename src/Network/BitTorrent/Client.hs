@@ -25,7 +25,6 @@ import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
-import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.UUID hiding (fromByteString)
@@ -129,11 +128,6 @@ readHandshake handle = do
     Right (unused, _, handshake) ->
       return (unused, handshake)
 {-# INLINABLE readHandshake #-}
-
-peerEchoer :: Chan PWP -> Handle -> IO ()
-peerEchoer c h = forever $ do
-  msg <- readChan c
-  BL.hPut h $ encode msg
 
 mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> IO ()
 mainPeerLoop state pData input =

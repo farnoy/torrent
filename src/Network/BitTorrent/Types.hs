@@ -1,7 +1,6 @@
 module Network.BitTorrent.Types where
 
 import Control.Concurrent
-import Control.Concurrent.Chan
 import Control.Concurrent.STM.TVar
 import Data.Binary
 import Data.ByteString.Internal as BI
@@ -9,7 +8,6 @@ import Data.Map.Strict (Map)
 -- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
-import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
 import qualified Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.Utility

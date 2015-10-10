@@ -8,7 +8,6 @@ module Network.BitTorrent.PeerMonad (
 ) where
 
 import Control.Concurrent
-import Control.Concurrent.Chan
 import Control.Concurrent.STM.TVar
 import Control.Monad
 import Control.Monad.Free.Church
@@ -32,7 +31,6 @@ import Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
-import System.IO
 import System.IO.Unsafe
 import System.Random hiding(next)
 
@@ -161,9 +159,9 @@ runTorrent :: ClientState -> PeerData -> [PWP] -> F TorrentM a -> IO a
 runTorrent state pData messages t = do
   chan <- newChan
   let peerState = PeerState pData chan
-  forkIO $ traverse_ (writeChan chan . PWPEvent) messages
+  void $ forkIO $ traverse_ (writeChan chan . PWPEvent) messages
   sharedChan <- dupChan (sharedMessages state)
-  forkIO $ forever $ readChan sharedChan >>= writeChan chan . SharedEvent
+  void $ forkIO $ forever $ readChan sharedChan >>= writeChan chan . SharedEvent
   -- TODO: store this threadId for killing later
   evalStateT (runReaderT (inside t) state) peerState
   where inside = iterM evalTorrent
