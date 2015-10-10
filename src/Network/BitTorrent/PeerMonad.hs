@@ -45,64 +45,64 @@ type PeerMonadIO = ReaderT ClientState (StateT PeerState IO)
 
 type Chunks = Map Word32 (ChunkField, ByteString)
 
-data TorrentSTM a = GetChunks (Chunks -> a)
-                  | ModifyChunks (Chunks -> Chunks) a
-                  | ReadBitfield (BF.BitField -> a)
-                  | ModifyBitfield (BF.BitField -> BF.BitField) a
-                  | ReadAvailability (AvailabilityData -> a)
-                  | ModifyAvailability (AvailabilityData -> AvailabilityData) a
-                  deriving(Functor)
+data MemoryMonad a = GetChunks (Chunks -> a)
+                   | ModifyChunks (Chunks -> Chunks) a
+                   | ReadBitfield (BF.BitField -> a)
+                   | ModifyBitfield (BF.BitField -> BF.BitField) a
+                   | ReadAvailability (AvailabilityData -> a)
+                   | ModifyAvailability (AvailabilityData -> AvailabilityData) a
+                   deriving(Functor)
 
-getChunks :: F TorrentSTM Chunks
+getChunks :: F MemoryMonad Chunks
 getChunks = liftF $ GetChunks id
 {-# INLINABLE getChunks #-}
 
-modifyChunks :: (Chunks -> Chunks) -> F TorrentSTM ()
+modifyChunks :: (Chunks -> Chunks) -> F MemoryMonad ()
 modifyChunks mut = liftF $ ModifyChunks mut ()
 {-# INLINABLE modifyChunks #-}
 
-getBitfield :: F TorrentSTM BF.BitField
+getBitfield :: F MemoryMonad BF.BitField
 getBitfield = liftF $ ReadBitfield id
 {-# INLINABLE getBitfield #-}
 
-modifyBitfield :: (BF.BitField -> BF.BitField) -> F TorrentSTM ()
+modifyBitfield :: (BF.BitField -> BF.BitField) -> F MemoryMonad ()
 modifyBitfield mut = liftF $ ModifyBitfield mut ()
 {-# INLINABLE modifyBitfield #-}
 
-getAvailability :: F TorrentSTM AvailabilityData
+getAvailability :: F MemoryMonad AvailabilityData
 getAvailability = liftF $ ReadAvailability id
 {-# INLINABLE getAvailability #-}
 
-modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F TorrentSTM ()
+modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F MemoryMonad ()
 modifyAvailability mut = liftF $ ModifyAvailability mut ()
 {-# INLINABLE modifyAvailability #-}
 
-evalTorrentSTM :: ClientState -> TorrentSTM (STM a) -> STM a
-evalTorrentSTM state (GetChunks next) = do
+evalMemoryMonad :: ClientState -> MemoryMonad (STM a) -> STM a
+evalMemoryMonad state (GetChunks next) = do
   chunks <- readTVar (pieceChunks state)
   next chunks
-evalTorrentSTM state (ModifyChunks f next) = do
+evalMemoryMonad state (ModifyChunks f next) = do
   modifyTVar' (pieceChunks state) f
   next
-evalTorrentSTM state (ReadBitfield next) = do
+evalMemoryMonad state (ReadBitfield next) = do
   res <- readTVar (bitField state)
   next res
-evalTorrentSTM state (ModifyBitfield mut next) = do
+evalMemoryMonad state (ModifyBitfield mut next) = do
   modifyTVar' (bitField state) mut
   next
-evalTorrentSTM state (ReadAvailability next) = do
+evalMemoryMonad state (ReadAvailability next) = do
   res <- readTVar (availabilityData state)
   next res
-evalTorrentSTM state (ModifyAvailability mut next) = do
+evalMemoryMonad state (ModifyAvailability mut next) = do
   modifyTVar' (availabilityData state) mut
   next
 
-runTorrentSTM :: ClientState -> F TorrentSTM a -> STM a
-runTorrentSTM state = iterM (evalTorrentSTM state)
+runMemoryMonad :: ClientState -> F MemoryMonad a -> STM a
+runMemoryMonad state = iterM (evalMemoryMonad state)
 
 data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage
 
-data PeerMonad a = forall b. RunSTM (F TorrentSTM b) (b -> a)
+data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetPeerData (PeerData -> a)
                 | Emit PWP a
                 | GetMeta (MetaInfo -> a)
@@ -112,7 +112,7 @@ data PeerMonad a = forall b. RunSTM (F TorrentSTM b) (b -> a)
                 | GetPeerEvent (PeerEvent -> a)
 
 instance Functor PeerMonad where
-  fmap f (RunSTM action next) = RunSTM action (fmap f next)
+  fmap f (RunMemory action next) = RunMemory action (fmap f next)
   fmap f (GetPeerData next) = GetPeerData (fmap f next)
   fmap f (Emit pwp next) = Emit pwp (f next)
   fmap f (GetMeta next) = GetMeta (fmap f next)
@@ -127,9 +127,9 @@ peerUnchoked = do
   updatePeerData $ peerData { peerChoking = False }
 {-# INLINABLE peerUnchoked #-}
 
-runSTM :: F TorrentSTM a -> F PeerMonad a
-runSTM stm = liftF $ RunSTM stm id
-{-# INLINABLE runSTM #-}
+runMemory :: F MemoryMonad a -> F PeerMonad a
+runMemory stm = liftF $ RunMemory stm id
+{-# INLINABLE runMemory #-}
 
 getPeerData :: F PeerMonad PeerData
 getPeerData = liftF $ GetPeerData id
@@ -169,9 +169,9 @@ runPeerMonad state pData messages outHandle t = do
   where inside = iterM evalPeerMonadIO
 
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
-evalPeerMonadIO (RunSTM a next) = do
+evalPeerMonadIO (RunMemory a next) = do
   state <- ask
-  res <- liftIO $ atomically $ runTorrentSTM state a
+  res <- liftIO $ atomically $ runMemoryMonad state a
   next res
 evalPeerMonadIO (GetPeerData next) = do
   PeerState pData _ _ <- get
@@ -206,7 +206,7 @@ evalPeerMonadIO (GetPeerEvent next) = do
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
-  chunkField <- runSTM $ do
+  chunkField <- runMemory $ do
     chunks <- getChunks
     case Map.lookup ix chunks of
       Just (chunkField, chunkData) -> do
@@ -232,7 +232,7 @@ receiveChunk ix offset d = do
 
 processPiece :: Word32 -> F PeerMonad ()
 processPiece ix = do
-  Just (chunkField, d) <- runSTM (Map.lookup ix <$> getChunks)
+  Just (chunkField, d) <- runMemory (Map.lookup ix <$> getChunks)
   when (CF.isCompleted chunkField) $ do
     meta <- getMeta
     let infoDict = info $ meta
@@ -245,7 +245,7 @@ processPiece ix = do
       print $ "Validating hashes " <> show hashCheck
       print ix-}
 
-    wasSetAlready <- runSTM $ do
+    wasSetAlready <- runMemory $ do
       modifyChunks $ Map.delete ix
       if hashCheck
         then do
@@ -265,7 +265,7 @@ processPiece ix = do
 handleBitfield :: ByteString -> F PeerMonad ()
 handleBitfield field = do
   peerData <- getPeerData
-  newBitField <- runSTM $ do
+  newBitField <- runMemory $ do
     len <- BF.length <$> getBitfield
     let newBitField = BF.BitField field len
     modifyAvailability $ PS.addToAvailability newBitField
@@ -276,10 +276,10 @@ handleBitfield field = do
 handleHave :: Word32 -> F PeerMonad ()
 handleHave ix = do
   peerData <- getPeerData
-  let peerData' = peerData { peerBitField = BF.set (peerBitField peerData) ix True }
-  runSTM $ do
-    let oldBf = peerBitField peerData
-        newBf = peerBitField peerData'
+  let oldBf = peerBitField peerData
+      newBf = BF.set oldBf ix True
+      peerData' = peerData { peerBitField = newBf }
+  runMemory $ do
     modifyAvailability $ PS.addToAvailability newBf . PS.removeFromAvailability oldBf
   updatePeerData peerData'
 
@@ -288,14 +288,13 @@ handleInterested = do
   peerData <- getPeerData
   when (amChoking peerData) $ do
     emit Unchoke
-    let peerData' = peerData { amChoking = False }
-    updatePeerData peerData'
+    updatePeerData $ peerData { amChoking = False, peerInterested = True }
 
 requestNextPiece :: F PeerMonad ()
 requestNextPiece = do
   peerData <- getPeerData
   unless (peerChoking peerData) $ do
-    (chunks, bf, avData) <- runSTM $ do
+    (chunks, bf, avData) <- runMemory $ do
       chunks <- getChunks
       avData <- getAvailability
       bf <- getBitfield
@@ -307,7 +306,7 @@ requestNextPiece = do
         defaultPieceLen = pieceLength infoDict
         totalSize = Meta.length infoDict
 
-        lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
+        lastStage = BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
         bfrequestable = if lastStage
                           then bf
                           else Map.foldlWithKey' (\bit ix (cf, _) ->
@@ -344,7 +343,7 @@ requestNextPiece = do
                     request = Request ix (cix * defaultChunkSize) nextChunkSize
                     modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
                 -- putStrLn $ "requesting " <> show request
-                runSTM  $ do
+                runMemory  $ do
                   modifyChunks (Map.insert ix (chunkField', chunkData))
                 updatePeerData modifiedPeer
                 emit request
@@ -355,7 +354,7 @@ requestNextPiece = do
             let chunksCount = chunksInPieces pieceLen defaultChunkSize
                 chunkData = B.replicate (fromIntegral pieceLen) 0
                 insertion = (CF.newChunkField chunksCount, chunkData)
-            runSTM $
+            runMemory $
               modifyChunks $ Map.insert ix insertion
             requestNextPiece
 
