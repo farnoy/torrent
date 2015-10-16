@@ -43,7 +43,7 @@ data ClientState = ClientState {
 data SharedMessage = RequestPiece
 
 defaultChunkSize :: Word32
-defaultChunkSize = 2 ^ (16 :: Word32)
+defaultChunkSize = 2 ^ (14 :: Word32)
 
 chunksInPieces :: Word32 -> Word32 -> Word32
 chunksInPieces = divideSize
