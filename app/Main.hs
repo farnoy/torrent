@@ -2,7 +2,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
+import Control.Concurrent
 import Control.Concurrent.Async
+import Control.Concurrent.STM
+import Control.Concurrent.STM.TVar
 import Control.Monad
 import qualified Data.Attoparsec.ByteString.Lazy as AL
 import qualified Data.ByteString.Lazy as BL
@@ -27,6 +30,13 @@ main = do
       void $ btListen clientState
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
+      forkIO $ progressLogger clientState
       traverse_ waitCatch promises
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
+
+progressLogger :: ClientState -> IO ()
+progressLogger state = forever $ do
+  bf <- atomically $ readTVar $ bitField state
+  print bf
+  threadDelay 5000000

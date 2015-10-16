@@ -35,33 +35,6 @@ import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
 
-testAddr bytes port = SockAddrInet port (decode $ BL.pack bytes :: Word32)
-
-testData = BL.toStrict $ BL.take (pieceSize * 48 - 80) $ BL.cycle "kopa to dopa"
-pieceSize :: Integral a => a
-pieceSize = 2^14 * 3 -- 3 chunks
-pieceCount :: Integral a => a
-pieceCount = ceiling $ fromIntegral (B.length testData) / (fromIntegral pieceSize)
-hashes = go testData
-  where go "" = ""
-        go input = hash (B.take pieceSize input) <> go (B.drop pieceSize input)
-
-fullBitField = BF.BitField (B.replicate (ceiling $ fromIntegral pieceCount / 8) 0xFF) pieceCount
-
-infoDictionaryRaw =
-  Dictionary $ Map.fromList [ ("piece length", Number $ fromIntegral pieceSize)
-                            , ("pieces", String hashes)
-                            , ("length", Number $ fromIntegral $ B.length testData)
-                            , ("name", String $ BC.pack $ "output-test")
-                            ]
-
-metaInfoRaw =
-  Dictionary $ Map.fromList [ ("info", infoDictionaryRaw)
-                            , ("announce", String "http://tracker.archlinux.org:6969/announce")
-                            ]
-
-testMeta = fromJust $ parseMetaInfo metaInfoRaw
-
 withSetup f = do
   tmpdir <- getTemporaryDirectory
   salt <- randomIO :: IO Word16

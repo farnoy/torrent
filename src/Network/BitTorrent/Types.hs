@@ -26,7 +26,7 @@ data PeerData = PeerData {
 , peerId :: ByteString
 , peerBitField :: BitField
 , requestsLive :: Word8
-}
+} deriving(Eq, Show)
 
 data ClientState = ClientState {
   myPeerId :: ByteString

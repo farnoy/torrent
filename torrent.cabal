@@ -21,12 +21,12 @@ library
                    , Network.BitTorrent.Client
                    , Network.BitTorrent.FileWriter
                    , Network.BitTorrent.MetaInfo
+                   , Network.BitTorrent.PeerMonad
                    , Network.BitTorrent.PeerSelection
                    , Network.BitTorrent.PWP
+                   , Network.BitTorrent.Types
   other-modules:   Network.BitTorrent.Utility
                  , Network.BitTorrent.ChunkField
-                 , Network.BitTorrent.Types
-                 , Network.BitTorrent.PeerMonad
   ghc-options:   -Wall -O -fprof-auto -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
                  , attoparsec
@@ -65,6 +65,7 @@ executable torrent
                      , http-types
                      , lens-family
                      , network
+                     , stm
                      , torrent
                      , unordered-containers
                      , uuid
@@ -81,6 +82,7 @@ test-suite torrent-test
                , Discover
                , MetaInfoSpec
                , PWPSpec
+               , PeerMonadSpec
                , PeerSelectionSpec
                , SpecHelper
 

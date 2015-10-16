@@ -5,6 +5,11 @@
 module Network.BitTorrent.PeerMonad (
   runPeerMonad
 , entryPoint
+
+-- for testing, temporarily
+, handlePWP
+, getPeerData
+, updatePeerData
 ) where
 
 import Control.Concurrent
@@ -177,7 +182,7 @@ evalPeerMonadIO (GetPeerData next) = do
   PeerState pData _ _ <- get
   next pData
 evalPeerMonadIO (Emit pwp next) = do
-  PeerState pData _ handle <- get
+  PeerState _ _ handle <- get
   liftIO $ BL.hPut handle (Binary.encode pwp)
   next
 evalPeerMonadIO (GetMeta next) = do

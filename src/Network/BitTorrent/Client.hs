@@ -61,10 +61,6 @@ newClientState dir meta listenPort = do
   let numPieces :: Integral a => a
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
   bit_field <- newTVarIO $ BF.newBitField numPieces
-  forkIO $ forever $ do
-    bf <- atomically $ readTVar bit_field
-    print bf
-    threadDelay 5000000
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
   avData <- newTVarIO $ VS.replicate numPieces 0
   mvar <- newMVar ()
