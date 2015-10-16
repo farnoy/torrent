@@ -81,9 +81,7 @@ btListen state = do
 startFromPeerHandshake :: ClientState -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
-  input <- BL.hGetContents handle
-  let Just (nextInput, BHandshake hisInfoHash peer) = readHandshake input
-
+  Just (BHandshake hisInfoHash peer) <- readHandshake handle
 
   let ourInfoHash = infoHash $ metaInfo state
       cond = hisInfoHash == ourInfoHash
@@ -99,7 +97,7 @@ startFromPeerHandshake state sock addr = do
 
     BL.hPut handle (encode $ Bitfield $ BF.raw bf)
 
-    mainPeerLoop state pData nextInput handle
+    mainPeerLoop state pData handle
 
 pieceCount :: ClientState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
@@ -109,33 +107,33 @@ reachOutToPeer state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
   handle <- socketToHandle sock ReadWriteMode
-  input <- BL.hGetContents handle
 
   writeHandshake handle state
-  let Just (nextInput, BHandshake hisInfoHash hisId) = readHandshake input
-      ourInfoHash = infoHash $ metaInfo state
+  Just (BHandshake hisInfoHash hisId) <- readHandshake handle
+
+  let ourInfoHash = infoHash $ metaInfo state
       bitField = BF.newBitField (pieceCount state)
 
   when (hisInfoHash == ourInfoHash) $ do
     let pData = newPeer bitField addr hisId
-    mainPeerLoop state pData nextInput handle
+    mainPeerLoop state pData handle
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
   where handshake = encode $ BHandshake (infoHash . metaInfo $ state) (myPeerId state)
 {-# INLINABLE writeHandshake #-}
 
-readHandshake :: BL.ByteString -> Maybe (BL.ByteString, BHandshake)
-readHandshake input = do
+readHandshake :: Handle -> IO (Maybe BHandshake)
+readHandshake handle = do
+  input <- BL.hGet handle 68
   case runGetOrFail get input of
-    Left _ -> Nothing -- the handshake is wrong/unsupported
-    Right (unused, _, handshake) ->
-      Just (unused, handshake)
+    Left _ -> pure Nothing -- the handshake is wrong/unsupported
+    Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: ClientState -> PeerData -> BL.ByteString -> Handle -> IO ()
-mainPeerLoop state pData input handle =
-  runPeerMonad state pData (messageStream input) handle entryPoint
+mainPeerLoop :: ClientState -> PeerData -> Handle -> IO ()
+mainPeerLoop state pData handle =
+  runPeerMonad state pData handle entryPoint
 
 messageStream :: BL.ByteString -> [PWP]
 messageStream input =

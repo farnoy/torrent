@@ -44,7 +44,9 @@ library
                  , mtl
                  , network
                  , random
+                 , resourcet
                  , stm
+                 , unix
                  , unordered-containers
                  , uuid
                  , vector
@@ -67,6 +69,7 @@ executable torrent
                      , network
                      , stm
                      , torrent
+                     , unix
                      , unordered-containers
                      , uuid
                      , vector
@@ -101,10 +104,13 @@ test-suite torrent-test
                      , http-client
                      , ieee754
                      , lens-family
+                     , mtl
                      , network
                      , random
+                     , resourcet
                      , stm
                      , torrent
+                     , unix
                      , unordered-containers
                      , uuid
                      , vector

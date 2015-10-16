@@ -6,6 +6,7 @@ module Network.BitTorrent.ChunkField (
 , getIncompleteChunks
 , markCompleted
 , markRequested
+, markMissing
 , isCompleted
 , isRequested
 ) where
@@ -41,6 +42,10 @@ markCompleted cf ix = Seq.update (fromIntegral ix) Completed cf
 markRequested :: Integral a => ChunkField -> a -> ChunkField
 markRequested cf ix = Seq.update (fromIntegral ix) Requested cf
 {-# INLINABLE markRequested #-}
+
+markMissing :: Integral a => ChunkField -> a -> ChunkField
+markMissing cf ix = Seq.update (fromIntegral ix) Missing cf
+{-# INLINABLE markMissing #-}
 
 isCompleted :: ChunkField -> Bool
 isCompleted = Foldable.all (==Completed)

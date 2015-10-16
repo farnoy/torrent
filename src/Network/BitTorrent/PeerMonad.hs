@@ -9,18 +9,24 @@ module Network.BitTorrent.PeerMonad (
 -- for testing, temporarily
 , handlePWP
 , getPeerData
+, getPeerEvent
+, PeerEvent(..)
 , updatePeerData
+, registerCleanup
 ) where
 
 import Control.Concurrent
 import Control.Concurrent.STM.TVar
+import Control.Exception.Base
 import Control.Monad
 import Control.Monad.Free.Church
 import Control.Monad.Reader
 import Control.Monad.STM
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Resource
 import Crypto.Hash.SHA1
 import qualified Data.Binary as Binary
+import qualified Data.Binary.Get as Binary.Get
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
@@ -43,10 +49,11 @@ import System.Random hiding(next)
 data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateChan :: Chan PeerEvent
                            , peerStateHandle :: Handle
+                           , peerStateCleanups :: Map (Word32, Word32) ReleaseKey
                            }
 
 -- TODO Logger
-type PeerMonadIO = ReaderT ClientState (StateT PeerState IO)
+type PeerMonadIO = ResourceT (ReaderT ClientState (StateT PeerState IO))
 
 type Chunks = Map Word32 (ChunkField, ByteString)
 
@@ -115,6 +122,8 @@ data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | WriteData Word32 ByteString a
                 | UpdatePeerData PeerData a
                 | GetPeerEvent (PeerEvent -> a)
+                | RegisterCleanup Word32 Word32 a
+                | DeregisterCleanup Word32 Word32 a
 
 instance Functor PeerMonad where
   fmap f (RunMemory action next) = RunMemory action (fmap f next)
@@ -125,6 +134,8 @@ instance Functor PeerMonad where
   fmap f (WriteData o b next) = WriteData o b (f next)
   fmap f (UpdatePeerData pData next) = UpdatePeerData pData (f next)
   fmap f (GetPeerEvent next) = GetPeerEvent (fmap f next)
+  fmap f (RegisterCleanup pieceId chunkId next) = RegisterCleanup pieceId chunkId (f next)
+  fmap f (DeregisterCleanup pieceId chunkId next) = DeregisterCleanup pieceId chunkId (f next)
 
 peerUnchoked :: F PeerMonad ()
 peerUnchoked = do
@@ -162,16 +173,36 @@ updatePeerData pData = liftF $ UpdatePeerData pData ()
 getPeerEvent :: F PeerMonad PeerEvent
 getPeerEvent = liftF $ GetPeerEvent id
 
-runPeerMonad :: ClientState -> PeerData -> [PWP] -> Handle -> F PeerMonad a -> IO a
-runPeerMonad state pData messages outHandle t = do
-  chan <- newChan
-  let peerState = PeerState pData chan outHandle
-  void $ forkIO $ traverse_ (writeChan chan . PWPEvent) messages
+registerCleanup :: Word32 -> Word32 -> F PeerMonad ()
+registerCleanup pieceId chunkId = liftF $ RegisterCleanup pieceId chunkId ()
+
+deregisterCleanup :: Word32 -> Word32 -> F PeerMonad ()
+deregisterCleanup pieceId chunkId = liftF $ DeregisterCleanup pieceId chunkId ()
+
+runPeerMonad :: ClientState -> PeerData -> Handle -> F PeerMonad a -> IO a
+runPeerMonad state pData outHandle t = do
+  pwpChan <- newChan
   sharedChan <- dupChan (sharedMessages state)
-  void $ forkIO $ forever $ readChan sharedChan >>= writeChan chan . SharedEvent
+
+  let peerState = PeerState pData pwpChan outHandle Map.empty
+
+  void $ forkIO $ messageForwarder outHandle pwpChan
+  void $ forkIO $ forever $ readChan sharedChan >>= writeChan pwpChan . SharedEvent
+
   -- TODO: store this threadId for killing later
-  evalStateT (runReaderT (inside t) state) peerState
+  evalStateT (runReaderT (runResourceT (inside t)) state) peerState
   where inside = iterM evalPeerMonadIO
+        messageForwarder handle pwpChan = (do
+          input <- BL.hGetContents handle
+          let messages = messageStream input
+          traverse_ (writeChan pwpChan . PWPEvent) messages)
+          `onException` writeChan pwpChan (PWPEvent undefined) -- to crash & release
+        messageStream :: BL.ByteString -> [PWP]
+        messageStream input =
+          case Binary.Get.runGetOrFail Binary.get input of
+            Left _ -> []
+            Right (rest, _, msg) -> msg : messageStream rest
+
 
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
 evalPeerMonadIO (RunMemory a next) = do
@@ -179,10 +210,10 @@ evalPeerMonadIO (RunMemory a next) = do
   res <- liftIO $ atomically $ runMemoryMonad state a
   next res
 evalPeerMonadIO (GetPeerData next) = do
-  PeerState pData _ _ <- get
+  PeerState pData _ _ _ <- get
   next pData
 evalPeerMonadIO (Emit pwp next) = do
-  PeerState _ _ handle <- get
+  PeerState _ _ handle _ <- get
   liftIO $ BL.hPut handle (Binary.encode pwp)
   next
 evalPeerMonadIO (GetMeta next) = do
@@ -208,9 +239,40 @@ evalPeerMonadIO (GetPeerEvent next) = do
   pState <- get
   msg <- liftIO $ readChan $ peerStateChan pState
   next msg
+evalPeerMonadIO (RegisterCleanup pieceId chunkId next) = do
+  state <- ask
+  pState <- get
+  let release _ = do
+        branch <- atomically $ do
+          chunks <- readTVar (pieceChunks state)
+          case Map.lookup pieceId chunks of
+            Just (cf, d) -> do
+              let cf' = CF.markMissing cf chunkId
+              modifyTVar' (pieceChunks state) (Map.insert pieceId (cf', d))
+              pure 1
+            Nothing -> pure 0
+        writeChan (sharedMessages state) WakeUp
+
+  (releaseKey, _) <- allocate (pure ()) release
+  put $ pState { peerStateCleanups = Map.insert (pieceId, chunkId) releaseKey (peerStateCleanups pState) }
+  next
+evalPeerMonadIO (DeregisterCleanup pieceId chunkId next) = do
+  state <- ask
+  pState <- get
+  let cleanups = peerStateCleanups pState
+
+  case Map.lookup (pieceId, chunkId) cleanups of
+    Just releaseKey -> do
+      void $ unprotect releaseKey
+      put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
+    Nothing -> pure ()
+
+  next
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
+  let chunkIndex = divideSize offset defaultChunkSize
+
   chunkField <- runMemory $ do
     chunks <- getChunks
     case Map.lookup ix chunks of
@@ -224,13 +286,13 @@ receiveChunk ix offset d = do
               dest = VS.take (B.length d) $ VS.drop (fromIntegral offset) chunkVector
               src = dataVector
           unsafePerformIO $ VS.copy dest src >> return (return ())
-        let chunkIndex = divideSize offset defaultChunkSize
-            chunkField' = CF.markCompleted chunkField chunkIndex
+        let chunkField' = CF.markCompleted chunkField chunkIndex
 
         modifyChunks $ Map.insert ix (chunkField', chunkData)
         return True
       _ -> return False -- someone already filled this
 
+  deregisterCleanup ix chunkIndex
   pData <- getPeerData
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
   when chunkField $ processPiece ix
@@ -311,7 +373,7 @@ requestNextPiece = do
         defaultPieceLen = pieceLength infoDict
         totalSize = Meta.length infoDict
 
-        lastStage = BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
+        lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
         bfrequestable = if lastStage
                           then bf
                           else Map.foldlWithKey' (\bit ix (cf, _) ->
@@ -344,10 +406,10 @@ requestNextPiece = do
                         else return $ CF.getNextChunk chunkField
             case nextChunk of
               Just (chunkField', cix) -> do
+                registerCleanup ix cix
                 let nextChunkSize = expectedChunkSize totalSize ix (cix+1) pieceLen defaultChunkSize
                     request = Request ix (cix * defaultChunkSize) nextChunkSize
                     modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-                -- putStrLn $ "requesting " <> show request
                 runMemory  $ do
                   modifyChunks (Map.insert ix (chunkField', chunkData))
                 updatePeerData modifiedPeer
@@ -383,3 +445,4 @@ entryPoint :: F PeerMonad ()
 entryPoint = forever $ getPeerEvent >>= handler
   where handler (PWPEvent pwp) = handlePWP pwp
         handler (SharedEvent RequestPiece) = requestNextPiece
+        handler (SharedEvent WakeUp) = requestNextPiece

@@ -14,6 +14,7 @@ import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import System.Environment
+import System.Posix.Signals
 
 openTorrentFile :: String -> IO (Maybe MetaInfo)
 openTorrentFile filename = do
@@ -31,12 +32,25 @@ main = do
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
       forkIO $ progressLogger clientState
-      traverse_ waitCatch promises
+      forkIO $ sharedMessagesLogger clientState
+      installHandler sigINT (CatchOnce (traverse_ cancel promises)) Nothing
+      traverse_ closePromise promises
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
+
+closePromise p = do
+  res <- waitCatch p
+  putStrLn "promise exited"
+  case res of
+    Left e -> print e
+    Right _ -> print "success & quit"
 
 progressLogger :: ClientState -> IO ()
 progressLogger state = forever $ do
   bf <- atomically $ readTVar $ bitField state
   print bf
   threadDelay 5000000
+
+sharedMessagesLogger :: ClientState -> IO ()
+sharedMessagesLogger state =
+  forever $ readChan (sharedMessages state) >>= print
