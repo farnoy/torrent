@@ -182,23 +182,23 @@ deregisterCleanup pieceId chunkId = liftF $ DeregisterCleanup pieceId chunkId ()
 
 runPeerMonad :: ClientState -> PeerData -> Handle -> F PeerMonad a -> IO a
 runPeerMonad state pData outHandle t = do
-  pwpChan <- newChan
+  privateChan <- newChan
   sharedChan <- dupChan (sharedMessages state)
 
-  let peerState = PeerState pData pwpChan outHandle Map.empty
+  let peerState = PeerState pData privateChan outHandle Map.empty
 
-  promise1 <- async $ messageForwarder outHandle pwpChan
-  promise2 <- async $ forever $ readChan sharedChan >>= writeChan pwpChan . SharedEvent
+  promise1 <- async $ messageForwarder outHandle privateChan
+  promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
   let action = evalStateT (runReaderT (runResourceT (inside t)) state) peerState
   action `finally` (cancel promise1 *> cancel promise2)
 
   where inside = iterM evalPeerMonadIO
-        messageForwarder handle pwpChan = (do
+        messageForwarder handle privateChan = (do
           input <- BL.hGetContents handle
           let messages = messageStream input
-          traverse_ (writeChan pwpChan . PWPEvent) messages)
-          `onException` writeChan pwpChan (PWPEvent undefined) -- to crash & release
+          traverse_ (writeChan privateChan . PWPEvent) messages)
+          `onException` writeChan privateChan (PWPEvent undefined) -- to crash & release
         messageStream :: BL.ByteString -> [PWP]
         messageStream input =
           case Binary.Get.runGetOrFail Binary.get input of
