@@ -16,6 +16,7 @@ module Network.BitTorrent.PeerMonad (
 ) where
 
 import Control.Concurrent
+import Control.Concurrent.Async
 import Control.Concurrent.STM.TVar
 import Control.Exception.Base
 import Control.Monad
@@ -186,11 +187,12 @@ runPeerMonad state pData outHandle t = do
 
   let peerState = PeerState pData pwpChan outHandle Map.empty
 
-  void $ forkIO $ messageForwarder outHandle pwpChan
-  void $ forkIO $ forever $ readChan sharedChan >>= writeChan pwpChan . SharedEvent
+  promise1 <- async $ messageForwarder outHandle pwpChan
+  promise2 <- async $ forever $ readChan sharedChan >>= writeChan pwpChan . SharedEvent
 
-  -- TODO: store this threadId for killing later
-  evalStateT (runReaderT (runResourceT (inside t)) state) peerState
+  let action = evalStateT (runReaderT (runResourceT (inside t)) state) peerState
+  action `finally` (cancel promise1 *> cancel promise2)
+
   where inside = iterM evalPeerMonadIO
         messageForwarder handle pwpChan = (do
           input <- BL.hGetContents handle

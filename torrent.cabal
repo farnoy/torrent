@@ -29,6 +29,7 @@ library
                  , Network.BitTorrent.ChunkField
   ghc-options:   -Wall -O -fprof-auto -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
+                 , async
                  , attoparsec
                  , binary
                  , bytestring
