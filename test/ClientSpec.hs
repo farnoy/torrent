@@ -32,8 +32,6 @@ import System.IO
 import System.Random
 import System.Timeout
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck
 
 withSetup f = do
   tmpdir <- getTemporaryDirectory
@@ -41,11 +39,11 @@ withSetup f = do
   let outDir = tmpdir </> show salt
   createDirectory outDir
   bracket (do
-    generated <- sample' (choose (6882 :: Word16, 15000))
+    generated <- getStdGen >>= pure . randomRs (6882 :: Word16, 15000)
     let ports = fromIntegral <$> generated
         bf = BF.newBitField pieceCount
-    let peer = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890"
-    let peer2 = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210"
+        peer = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890"
+        peer2 = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210"
     state <- newClientState outDir testMeta (fromIntegral $ ports !! 2)
     return (peer, peer2, state, testMeta)) (\_ -> do
       removeDirectoryRecursive outDir

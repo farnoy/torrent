@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module BitFieldSpec where
 
 import Data.Word
@@ -9,17 +11,9 @@ import qualified Network.BitTorrent.BitField as BF
 import SpecHelper
 import System.Random
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck
-
-newtype BitFieldLen = BitFieldLen Word32 deriving(Show, Eq)
-
-instance Random BitFieldLen where
-  random gen = (BitFieldLen word, gen')
-               where (word, gen') = random gen
-
-instance Arbitrary BitFieldLen where
-  arbitrary = BitFieldLen <$> choose (0, 100)
+import Test.Hspec.SmallCheck
+import Test.SmallCheck
+import Test.SmallCheck.Series
 
 setMultiple :: Word32 -> [(Word32, Bool)] -> BF.BitField
 setMultiple len = go starting
@@ -29,36 +23,43 @@ setMultiple len = go starting
 
 spec :: SpecWith ()
 spec = do
-  prop "reports length properly" $ \s ->
+  it "reports length properly" $ property $ \s ->
     let field = BF.newBitField s
-    in BF.length field `shouldBe` s
+    in BF.length field == s
 
-  prop "getting bits" $ \(BitFieldLen len, BitFieldLen nth) -> nth < len ==> (
+  it "sets all bits to False on creation" $ property $ \n ->
+    let field = BF.newBitField n
+    in forAll $ \ix -> ix <= n ==>
+      BF.get field ix == False
+
+  it "sets bits properly" $ property $ \len ->
     let field = BF.newBitField len
-    in BF.get field nth === False)
+    in forAll $ \ix -> ix < len ==>
+      let modified = BF.set field ix True
+      in BF.get modified ix == True
 
-  it "gets the last bit properly" $
-    let field = BF.newBitField 16
-    in BF.get field 15 === False
-
-  prop "sets bits properly" $ \(BitFieldLen len, BitFieldLen nth) -> nth < len ==> (
-    let field = BF.set (BF.newBitField len) nth True
-    in BF.get field nth === True)
+  it "sets only one bit at a time" $ property $ \len ->
+    let field = BF.newBitField len
+    in forAll $ \ix -> ix < len ==>
+      let modified = BF.set field ix True
+      in existsUnique $ \jx -> jx < len && BF.get modified jx == True
 
   -- regression test
-  prop "setting bits does not change data size" $ \(BitFieldLen len, BitFieldLen nth) ->
-    nth < len ==> (
-      let field = BF.set (BF.newBitField len) nth True
-      in BF.lengthRaw field === (ceiling $ fromIntegral len / 8))
+  -- bad usage won't blow it up unexpectedly
+  it "setting bits does not change data size" $ property $ \len ->
+    forAll $ \ix -> ix >= len ==>
+      let field = BF.set (BF.newBitField len) ix True
+      in BF.lengthRaw field == (ceiling $ fromIntegral len / 8)
 
-  prop "setting bits does not change reported size" $ \(BitFieldLen len, BitFieldLen nth) ->
-    nth < len ==> (
-      let field = BF.set (BF.newBitField len) nth True
-      in BF.length field === len)
+  it "setting bits does not change reported size" $ property $ \len ->
+    forAll $ \ix -> ix < len ==>
+      let field = BF.set (BF.newBitField len) ix True
+      in BF.length field == len
 
-  prop "sets properly the values requested" $ \(values :: [(BitFieldLen, Bool)]) ->
-    nub (fst <$> values) == (fst <$> values) ==> (
-         let values' = (\(BitFieldLen len, val) -> (len, val)) <$> values
-      in let field = setMultiple 100 values'
-      in let correct = (\(ix, val) -> BF.get field ix == val) <$> values'
-      in foldl' (&&) True correct)
+  it "sets properly the values requested" $ property $ \values ->
+    -- nub because we don't support checking overwrites
+    nub (fst <$> values) == (fst <$> values) ==>
+      let values' = (\(len, val) -> (len, val)) <$> values
+          field = setMultiple 100 values'
+          correct = (\(ix, val) -> BF.get field ix == val) <$> values'
+      in and correct

@@ -1,4 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module SpecHelper where
 
 import Control.Monad
@@ -15,26 +18,33 @@ import Data.Monoid ((<>))
 import Network.BitTorrent.Bencoding
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.MetaInfo
-import Network.Socket
-import Test.QuickCheck
-import Test.QuickCheck.Instances()
+import Network.BitTorrent.PWP
+import Network.Socket (SockAddr(..))
+import Test.SmallCheck
+import Test.SmallCheck.Series
 
-instance Arbitrary BValue where
-  arbitrary = do
-    selected <- elements [0, 1, 2, 3] :: Gen Int
-    case selected of
-      0 -> String <$> arbitrary
-      1 -> Number <$> arbitrary
-      2 -> do
-        n <- arbitrarySizedNatural
-        contents <- resize (n `quot` 2) $ replicateM n arbitrary
-        return $ List contents
-      _ -> do
-        n <- arbitrarySizedNatural
-        let pairsPure = [(,) <$> arbitrary <*> arbitrary | _ <- [0..n]]
-        pairs <- resize (n `quot` 2) $ sequence pairsPure
-        let m = Data.Foldable.foldl' (\m' (k, v) -> Map.insert k v m') Map.empty pairs
-        return $ Dictionary m
+instance Monad m => Serial m B.ByteString where
+  series = cons1 B.pack
+
+instance (Monad m, Ord k, Serial m k, Serial m v) => Serial m (Map.Map k v) where
+  series = cons1 Map.fromList
+
+instance Monad m => Serial m BValue where
+  series = cons1 String \/ cons1 Number \/ cons1 List \/ cons1 Dictionary
+
+instance Monad m => Serial m Word32 where
+  series = fromIntegral <$> (series :: Series m (Test.SmallCheck.Series.Positive Int))
+
+instance Monad m => Serial m Word8 where
+  series = fromIntegral <$> (series :: Series m (Test.SmallCheck.Series.Positive Int))
+
+instance Monad m => Serial m PWP where
+  series = cons0 KeepAlive \/ cons0 Choke \/ cons0 Unchoke \/ cons0 Interested
+        \/ cons0 Uninterested \/ cons1 Have \/ cons1 Bitfield \/ cons3 Request
+        \/ cons3 Piece \/ cons3 Cancel
+
+instance Monad m => Serial m BHandshake where
+  series = cons2 BHandshake
 
 testAddr bytes port = SockAddrInet port (decode $ BL.pack bytes :: Word32)
 

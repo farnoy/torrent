@@ -9,7 +9,7 @@ import Control.Applicative
 import Data.Attoparsec.ByteString.Char8 (Parser)
 import qualified Data.Attoparsec.ByteString.Char8 as P
 import Data.ByteString as B
-import Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Char8 as BC
 import Data.Foldable
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map

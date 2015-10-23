@@ -8,12 +8,13 @@ import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 import SpecHelper
 import Test.Hspec
-import Test.Hspec.QuickCheck
+import Test.Hspec.SmallCheck
+import Test.SmallCheck
 
 spec :: SpecWith ()
 spec = do
-  prop "parses values" $ \s ->
-    AC.maybeResult (AC.parse value (serialize s)) `shouldBe` Just s
+  it "parses values" $ property $ \s ->
+    AC.maybeResult (AC.parse value (serialize s)) == Just s
 
   describe "lenses" $ do
     describe "bstring" $ do
