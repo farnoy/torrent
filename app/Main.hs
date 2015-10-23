@@ -13,6 +13,7 @@ import Data.Foldable (traverse_)
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
+import Network.BitTorrent.Types
 import System.Environment
 import System.Posix.Signals
 
@@ -31,8 +32,10 @@ main = do
       void $ btListen clientState
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
+      -- dont do this here in the future
       forkIO $ progressLogger clientState
       forkIO $ sharedMessagesLogger clientState
+      forkIO $ periodicCheckup clientState
       installHandler sigINT (CatchOnce (traverse_ cancel promises)) Nothing
       traverse_ closePromise promises
       return ()
@@ -54,3 +57,8 @@ progressLogger state = forever $ do
 sharedMessagesLogger :: ClientState -> IO ()
 sharedMessagesLogger state =
   forever $ readChan (sharedMessages state) >>= print
+
+periodicCheckup :: ClientState -> IO ()
+periodicCheckup state = forever $ do
+  threadDelay 1000000
+  writeChan (sharedMessages state) Checkup

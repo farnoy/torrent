@@ -18,6 +18,7 @@ library
   exposed-modules:   Network.BitTorrent.Bencoding
                    , Network.BitTorrent.Bencoding.Lenses
                    , Network.BitTorrent.BitField
+                   , Network.BitTorrent.ChunkField
                    , Network.BitTorrent.Client
                    , Network.BitTorrent.FileWriter
                    , Network.BitTorrent.MetaInfo
@@ -26,8 +27,7 @@ library
                    , Network.BitTorrent.PWP
                    , Network.BitTorrent.Types
   other-modules:   Network.BitTorrent.Utility
-                 , Network.BitTorrent.ChunkField
-  ghc-options:   -Wall -O -fprof-auto -fno-warn-name-shadowing
+  ghc-options:   -Wall -O -fprof-auto -auto-all -caf-all -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
                  , async
                  , attoparsec
@@ -47,6 +47,7 @@ library
                  , random
                  , resourcet
                  , stm
+                 , time
                  , unix
                  , unordered-containers
                  , uuid
@@ -56,7 +57,7 @@ library
 executable torrent
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall -O -fprof-auto -fno-warn-name-shadowing
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall -O -fprof-auto -auto-all -fno-warn-name-shadowing
   build-depends:       base
                      , attoparsec
                      , async
@@ -82,6 +83,7 @@ test-suite torrent-test
   main-is:             Spec.hs
   other-modules: BencodingSpec
                , BitFieldSpec
+               , ChunkFieldSpec
                , ClientSpec
                , Discover
                , MetaInfoSpec

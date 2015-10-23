@@ -8,6 +8,8 @@ module Network.BitTorrent.BitField (
 , get
 , set
 , completed
+, fromChunkFields
+, union
 ) where
 
 import Data.Bits
@@ -16,6 +18,7 @@ import Data.Foldable as Foldable
 import qualified Data.ByteString as B
 import Data.Monoid
 import Data.Word
+import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.Utility
 
 data BitField = BitField ByteString Word32 deriving(Show, Eq)
@@ -24,6 +27,29 @@ newBitField :: Word32 -> BitField
 newBitField len = BitField (B.replicate (fromIntegral byteLength) 0) len
   where byteLength = divideSize len 8
 {-# INLINABLE newBitField #-}
+
+fromChunkFields :: Word32 -> [(Word32, ChunkField)] -> BitField
+fromChunkFields len chunksOriginal =
+  BitField (snd $ B.mapAccumL f (0, chunksOriginal) fresh) len
+  where byteLength = divideSize len 8
+        fresh = B.replicate (fromIntegral byteLength) 0
+        f (ix, chunks) w =
+          let (chunks', res) = foldl' (g ix) (chunks, w) [0..7]
+          in ((ix + 8, chunks'), res)
+        {-# INLINABLE f #-}
+        g ix (chunks, byte) n = case chunks of
+          (currentIx, cf):restChunks | currentIx == ix + n ->
+            if CF.isRequested cf
+              then (restChunks, byte `setBit` fromIntegral (7 - n))
+              else (restChunks, byte)
+          _ -> (chunks, byte)
+        {-# INLINABLE g #-}
+
+
+union :: BitField -> BitField -> BitField
+union (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
+  where f ix w = (ix + 1, w .|. B.index b ix)
+        {-# INLINABLE f #-}
 
 length :: BitField -> Word32
 length (BitField _ s) = s

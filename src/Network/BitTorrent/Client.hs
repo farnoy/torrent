@@ -30,7 +30,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.UUID hiding (fromByteString)
 import Data.UUID.V4
-import qualified Data.Vector.Storable as VS
+import qualified Data.Vector.Unboxed as VU
 -- import Hexdump
 import Lens.Family2
 import Network.BitTorrent.Bencoding
@@ -62,7 +62,7 @@ newClientState dir meta listenPort = do
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
   bit_field <- newTVarIO $ BF.newBitField numPieces
   outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
-  avData <- newTVarIO $ VS.replicate numPieces 0
+  avData <- newTVarIO $ VU.replicate numPieces 0
   mvar <- newMVar ()
   sharedMessages <- newChan
   return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData sharedMessages

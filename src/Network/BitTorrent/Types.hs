@@ -40,7 +40,7 @@ data ClientState = ClientState {
 , sharedMessages :: Chan SharedMessage
 }
 
-data SharedMessage = RequestPiece | WakeUp deriving (Eq, Show)
+data SharedMessage = RequestPiece | Checkup deriving (Eq, Show)
 
 defaultChunkSize :: Word32
 defaultChunkSize = 2 ^ (14 :: Word32)
