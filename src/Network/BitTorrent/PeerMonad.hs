@@ -9,7 +9,7 @@ module Network.BitTorrent.PeerMonad (
 , entryPoint
 
 #ifdef TESTING
-, PeerMonad()
+, PeerMonad(..)
 , PeerEvent(..)
 , handlePWP
 #endif
