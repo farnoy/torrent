@@ -42,6 +42,8 @@ data ClientState = ClientState {
 
 data SharedMessage = RequestPiece | Checkup deriving (Eq, Show)
 
+type Chunks = Map Word32 (ChunkField, ByteString)
+
 defaultChunkSize :: Word32
 defaultChunkSize = 2 ^ (14 :: Word32)
 

@@ -2,17 +2,32 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE CPP #-}
+
 module Network.BitTorrent.PeerMonad (
   runPeerMonad
 , entryPoint
 
--- for testing, temporarily
-, handlePWP
-, getPeerData
-, getPeerEvent
+#ifdef TESTING
+, PeerMonad()
 , PeerEvent(..)
+, handlePWP
+#endif
+
+-- ops
+, runMemory
+, getPeerData
+, emit
+, getMeta
+, readData
+, writeData
 , updatePeerData
+, getPeerEvent
 , registerCleanup
+, deregisterCleanup
+, releaseCleanup
+, getCleanups
+, getTime
 ) where
 
 import Control.Concurrent
@@ -40,6 +55,7 @@ import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
+import Network.BitTorrent.MemoryMonad
 import Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
@@ -58,63 +74,6 @@ data PeerState = PeerState { peerStateData :: !PeerData
 
 -- TODO Logger
 type PeerMonadIO = ResourceT (ReaderT ClientState (StateT PeerState IO))
-
-type Chunks = Map Word32 (ChunkField, ByteString)
-
-data MemoryMonad a = GetChunks (Chunks -> a)
-                   | ModifyChunks (Chunks -> Chunks) a
-                   | ReadBitfield (BF.BitField -> a)
-                   | ModifyBitfield (BF.BitField -> BF.BitField) a
-                   | ReadAvailability (AvailabilityData -> a)
-                   | ModifyAvailability (AvailabilityData -> AvailabilityData) a
-                   deriving(Functor)
-
-getChunks :: F MemoryMonad Chunks
-getChunks = liftF $ GetChunks id
-{-# INLINABLE getChunks #-}
-
-modifyChunks :: (Chunks -> Chunks) -> F MemoryMonad ()
-modifyChunks mut = liftF $ ModifyChunks mut ()
-{-# INLINABLE modifyChunks #-}
-
-getBitfield :: F MemoryMonad BF.BitField
-getBitfield = liftF $ ReadBitfield id
-{-# INLINABLE getBitfield #-}
-
-modifyBitfield :: (BF.BitField -> BF.BitField) -> F MemoryMonad ()
-modifyBitfield mut = liftF $ ModifyBitfield mut ()
-{-# INLINABLE modifyBitfield #-}
-
-getAvailability :: F MemoryMonad AvailabilityData
-getAvailability = liftF $ ReadAvailability id
-{-# INLINABLE getAvailability #-}
-
-modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F MemoryMonad ()
-modifyAvailability mut = liftF $ ModifyAvailability mut ()
-{-# INLINABLE modifyAvailability #-}
-
-evalMemoryMonad :: ClientState -> MemoryMonad (STM a) -> STM a
-evalMemoryMonad state (GetChunks next) = do
-  chunks <- readTVar (pieceChunks state)
-  next chunks
-evalMemoryMonad state (ModifyChunks f next) = do
-  modifyTVar' (pieceChunks state) f
-  next
-evalMemoryMonad state (ReadBitfield next) = do
-  res <- readTVar (bitField state)
-  next res
-evalMemoryMonad state (ModifyBitfield mut next) = do
-  modifyTVar' (bitField state) mut
-  next
-evalMemoryMonad state (ReadAvailability next) = do
-  res <- readTVar (availabilityData state)
-  next res
-evalMemoryMonad state (ModifyAvailability mut next) = do
-  modifyTVar' (availabilityData state) mut
-  next
-
-runMemoryMonad :: ClientState -> F MemoryMonad a -> STM a
-runMemoryMonad state = iterM (evalMemoryMonad state)
 
 data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage
 
@@ -234,7 +193,7 @@ runPeerMonad state pData outHandle t = do
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
 evalPeerMonadIO (RunMemory a next) = do
   state <- ask
-  res <- liftIO $ atomically $ runMemoryMonad state a
+  res <- liftIO $ atomically $ runMemoryMonadSTM state a
   next res
 evalPeerMonadIO (GetPeerData next) = do
   PeerState pData _ _ _ <- get
