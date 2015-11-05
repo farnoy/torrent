@@ -5,7 +5,10 @@ import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TVar
 import Control.Exception.Base
-import Control.Monad.Error.Class
+import Control.Monad.Catch hiding(throwM, catch)
+import qualified Control.Monad.Catch as Catch
+import Control.Monad.Catch.Pure
+import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.Free.Church
 import Control.Monad.Reader
 import Control.Monad.State.Strict
@@ -58,17 +61,28 @@ data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateMemory :: Memory
                            }
 
-type PeerMonadTest = ReaderT ClientState (StateT PeerState Identity)
+type PeerMonadTest = ReaderT ClientState (StateT PeerState Catch)
 
 runPeerMonadTest :: ClientState
                  -> PeerData
                  -> Memory
                  -> [PeerEvent]
                  -> F PeerMonad a
-                 -> (a, PeerState)
+                 -> Either (Maybe PeerError) (a, PeerState)
 runPeerMonadTest state pData memory events t =
-  runIdentity (runStateT (runReaderT (iterM evalPeerMonadTest t) state) peerState)
+  case result of
+    Left e -> Left (fromException e)
+    Right a -> Right a
   where peerState = PeerState pData [] [] events memory
+        result = runCatch (
+                   runStateT (
+                     runReaderT (
+                       iterM evalPeerMonadTest t
+                     )
+                     state
+                   )
+                   peerState
+                 )
 
 evalPeerMonadTest :: PeerMonad (PeerMonadTest a) -> PeerMonadTest a
 evalPeerMonadTest (GetPeerData next) = do
@@ -85,13 +99,19 @@ evalPeerMonadTest (UpdatePeerData pData next) = do
   next
 evalPeerMonadTest (GetPeerEvent next) = do
   pState@(PeerState _ _ _ events _) <- get
-  put $ pState { peerStateEvents = Prelude.tail events }
-  next $ Prelude.head events
+  case events of
+    [] -> Catch.throwM ConnectionLost
+    (event:rest) -> do
+      put $ pState { peerStateEvents = rest }
+      next event
 evalPeerMonadTest (RunMemory action next) = do
   pState <- get
   let (res, mem') = runMemoryMonadTest (peerStateMemory pState) action
   put $ pState { peerStateMemory = mem' }
   next res
+evalPeerMonadTest (Throw e next) = Catch.throwM e *> next
+evalPeerMonadTest (Catch action handler ) =
+  Catch.catch action handler
 
 spec :: SpecWith ()
 spec = do
@@ -109,8 +129,26 @@ spec = do
       describe "for Have message" $ do
         it "properly adjust the peer bitfield" $ do
           let exp = handlePWP (Have 2) *> getPeerData
-              (pData', _) = runPeerMonadTest state pData memory [] exp
+              Right (pData', _) = runPeerMonadTest state pData memory [] exp
           BF.get (peerBitField pData') 2 `shouldBe` True
+
+    describe "exception handling" $ do
+      it "catches errors from monad evaluation" $ do
+        let exp = catchError (getPeerEvent *> pure 0) (const $ pure 2)
+            res = fst <$> runPeerMonadTest state pData memory [] exp
+        res `shouldBe` Right 2
+
+  describe "PeerMonadTest" $ do
+    describe "exception handling" $ do
+      describe "on getPeerEvent" $ do
+        it "throws ConnectionLost after all messages" $ do
+          let events = [PWPEvent KeepAlive, SharedEvent Checkup]
+              exp = do
+                res  <- sequence (replicate 2 getPeerEvent)
+                res2 <- catchError (getPeerEvent *> pure False) (const $ pure True)
+                return (res, res2)
+              res = fst <$> runPeerMonadTest state pData memory events exp
+          res `shouldBe` Right (events, True)
 
   describe "PeerMonadIO" $ do
     describe "local state manipulation" $ do
@@ -118,16 +156,4 @@ spec = do
         let pData' = pData { amChoking = False }
             exp = updatePeerData pData' *> getPeerData
         returned <- runPeerMonad state pData handle exp
-        returned `shouldBe` pData'
-
-    describe "exception handling" $ do
-      describe "resource allocation" $ do
-        it "emits a message when releasing abruptly" $ do
-          let exp = do
-                      registerCleanup 3 0
-                      undefined
-          runPeerMonad state pData handle exp `shouldThrow` anyErrorCall
-          res <- timeout 1000 $ readChan (sharedMessages state)
-          pending
-          -- res `shouldBe` Just WakeUp
-
+        returned `shouldBe` Right pData'

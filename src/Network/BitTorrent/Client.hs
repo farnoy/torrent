@@ -15,6 +15,7 @@ module Network.BitTorrent.Client (
 
 import Control.Concurrent
 import Control.Concurrent.STM.TVar
+import Control.Exception.Base
 import Control.Monad
 import Control.Monad.STM
 import Crypto.Hash.SHA1
@@ -98,6 +99,7 @@ startFromPeerHandshake state sock addr = do
     BL.hPut handle (encode $ Bitfield $ BF.raw bf)
 
     mainPeerLoop state pData handle
+    pure ()
 
 pieceCount :: ClientState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
@@ -117,6 +119,7 @@ reachOutToPeer state addr = do
   when (hisInfoHash == ourInfoHash) $ do
     let pData = newPeer bitField addr hisId
     mainPeerLoop state pData handle
+    pure ()
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
@@ -131,7 +134,7 @@ readHandshake handle = do
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: ClientState -> PeerData -> Handle -> IO ()
+mainPeerLoop :: ClientState -> PeerData -> Handle -> IO (Either PeerError ())
 mainPeerLoop state pData handle =
   runPeerMonad state pData handle entryPoint
 

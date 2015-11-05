@@ -7,6 +7,7 @@
 module Network.BitTorrent.PeerMonad (
   runPeerMonad
 , entryPoint
+, PeerError(..)
 
 #ifdef TESTING
 , PeerMonad(..)
@@ -28,18 +29,21 @@ module Network.BitTorrent.PeerMonad (
 , releaseCleanup
 , getCleanups
 , getTime
+, catchError
+, throwError
 ) where
 
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM.TVar
-import Control.Exception.Base
 import Control.Monad
+import Control.Monad.Catch hiding(throwM, catch)
+import qualified Control.Monad.Catch as Catch
+import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.Free.Church
 import Control.Monad.Reader
 import Control.Monad.STM
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Resource
 import Crypto.Hash.SHA1
 import qualified Data.Binary as Binary
 import qualified Data.Binary.Get as Binary.Get
@@ -47,6 +51,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
 import Data.Foldable (traverse_)
+import Data.Functor.Identity
 import Data.Map.Strict as Map
 import Data.Time.Clock
 import Data.Word
@@ -61,10 +66,11 @@ import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
 import System.IO
+import System.IO.Error
 import System.IO.Unsafe
 import System.Random hiding(next)
 
-type Cleanups = Map (Word32, Word32) (ReleaseKey, UTCTime)
+type Cleanups = Map (Word32, Word32) UTCTime
 
 data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateChan :: Chan PeerEvent
@@ -72,10 +78,14 @@ data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateCleanups :: Cleanups
                            }
 
--- TODO Logger
-type PeerMonadIO = ResourceT (ReaderT ClientState (StateT PeerState IO))
+data PeerError = ConnectionLost deriving(Eq,Show)
 
-data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage
+instance Exception PeerError
+
+-- TODO Logger
+type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState IO))
+
+data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage deriving(Eq,Show)
 
 data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetPeerData (PeerData -> a)
@@ -87,9 +97,10 @@ data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetPeerEvent (PeerEvent -> a)
                 | RegisterCleanup Word32 Word32 a
                 | DeregisterCleanup Word32 Word32 a
-                | ReleaseCleanup Word32 Word32 a
                 | GetCleanups (Cleanups -> a)
                 | GetTime (UTCTime -> a)
+                | Throw PeerError a
+                | Catch a (PeerError -> a)
 
 instance Functor PeerMonad where
   fmap f (RunMemory action next) = RunMemory action (fmap f next)
@@ -102,9 +113,10 @@ instance Functor PeerMonad where
   fmap f (GetPeerEvent next) = GetPeerEvent (fmap f next)
   fmap f (RegisterCleanup pieceId chunkId next) = RegisterCleanup pieceId chunkId (f next)
   fmap f (DeregisterCleanup pieceId chunkId next) = DeregisterCleanup pieceId chunkId (f next)
-  fmap f (ReleaseCleanup pieceId chunkId next) = ReleaseCleanup pieceId chunkId (f next)
   fmap f (GetCleanups next) = GetCleanups (fmap f next)
   fmap f (GetTime next) = GetTime (fmap f next)
+  fmap f (Throw err next) = Throw err (f next)
+  fmap f (Catch action handler) = Catch (f action) (fmap f handler)
 
 peerUnchoked :: F PeerMonad ()
 peerUnchoked = do
@@ -152,10 +164,6 @@ deregisterCleanup :: Word32 -> Word32 -> F PeerMonad ()
 deregisterCleanup pieceId chunkId = liftF $ DeregisterCleanup pieceId chunkId ()
 {-# INLINABLE deregisterCleanup #-}
 
-releaseCleanup :: Word32 -> Word32 -> F PeerMonad ()
-releaseCleanup pieceId chunkId = liftF $ ReleaseCleanup pieceId chunkId ()
-{-# INLINABLE releaseCleanup #-}
-
 getCleanups :: F PeerMonad Cleanups
 getCleanups = liftF $ GetCleanups id
 {-# INLINABLE getCleanups #-}
@@ -164,25 +172,39 @@ getTime :: F PeerMonad UTCTime
 getTime = liftF $ GetTime id
 {-# INLINABLE getTime #-}
 
-runPeerMonad :: ClientState -> PeerData -> Handle -> F PeerMonad a -> IO a
+throwError :: PeerError -> F PeerMonad ()
+throwError err = liftF $ Throw err ()
+{-# INLINABLE throwError #-}
+
+catchError :: F PeerMonad a -> (PeerError -> F PeerMonad a) -> F PeerMonad a
+catchError action handler = join $ liftF $ Catch action handler
+{-# INLINABLE catchError #-}
+
+runPeerMonad :: Show a =>
+                ClientState
+             -> PeerData
+             -> Handle
+             -> F PeerMonad a
+             -> IO (Either PeerError a)
 runPeerMonad state pData outHandle t = do
   privateChan <- newChan
   sharedChan <- dupChan (sharedMessages state)
 
   let peerState = PeerState pData privateChan outHandle Map.empty
+  mainThreadId <- myThreadId
 
-  promise1 <- async $ messageForwarder outHandle privateChan
+  promise1 <- async $ messageForwarder mainThreadId outHandle privateChan
   promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
-  let action = evalStateT (runReaderT (runResourceT (inside t)) state) peerState
+  let action = evalStateT (runReaderT (runExceptT (inside t)) state) peerState
   action `finally` (cancel promise1 *> cancel promise2 *> hClose outHandle)
 
   where inside = iterM evalPeerMonadIO
-        messageForwarder handle privateChan = (do
+        messageForwarder mainThreadId handle privateChan = (do
           input <- BL.hGetContents handle
           let messages = messageStream input
           traverse_ (writeChan privateChan . PWPEvent) messages)
-          `onException` writeChan privateChan (PWPEvent undefined) -- to crash & release
+          `onException` throwTo mainThreadId ConnectionLost
         messageStream :: BL.ByteString -> [PWP]
         messageStream input =
           case Binary.Get.runGetOrFail Binary.get input of
@@ -200,7 +222,9 @@ evalPeerMonadIO (GetPeerData next) = do
   next pData
 evalPeerMonadIO (Emit pwp next) = do
   PeerState _ _ handle _ <- get
-  liftIO $ BL.hPut handle (Binary.encode pwp)
+  liftIO $ Catch.catchIOError
+             (BL.hPut handle (Binary.encode pwp))
+             (const (Catch.throwM ConnectionLost))
   next
 evalPeerMonadIO (GetMeta next) = do
   meta <- metaInfo <$> ask
@@ -226,38 +250,20 @@ evalPeerMonadIO (GetPeerEvent next) = do
   msg <- liftIO $ readChan $ peerStateChan pState
   next msg
 evalPeerMonadIO (RegisterCleanup pieceId chunkId next) = do
-  state <- ask
   pState <- get
-  let release _ = atomically $ do
-        chunks <- readTVar (pieceChunks state)
-        case Map.lookup pieceId chunks of
-          Just (cf, d) -> do
-            let cf' = CF.markMissing cf (fromIntegral chunkId)
-            modifyTVar' (pieceChunks state) (Map.insert pieceId (cf', d))
-          Nothing -> pure ()
 
-  (releaseKey, _) <- allocate (pure ()) release
   t <- liftIO $ getCurrentTime
-  put $ pState { peerStateCleanups = Map.insert (pieceId, chunkId) (releaseKey, t) (peerStateCleanups pState) }
-  next
-evalPeerMonadIO (ReleaseCleanup pieceId chunkId next) = do
-  pState <- get
-  let cleanups = peerStateCleanups pState
-
-  case Map.lookup (pieceId, chunkId) cleanups of
-    Just (releaseKey, _) -> do
-      release releaseKey
-      put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
-    Nothing -> pure ()
-
+  put $ pState { peerStateCleanups =
+                 Map.insert (pieceId, chunkId)
+                            t
+                            (peerStateCleanups pState) }
   next
 evalPeerMonadIO (DeregisterCleanup pieceId chunkId next) = do
   pState <- get
   let cleanups = peerStateCleanups pState
 
   case Map.lookup (pieceId, chunkId) cleanups of
-    Just (releaseKey, _) -> do
-      void $ unprotect releaseKey
+    Just _ -> do
       put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
     Nothing -> pure ()
 
@@ -266,6 +272,9 @@ evalPeerMonadIO (GetCleanups next) = do
   pState <- get
   next (peerStateCleanups pState)
 evalPeerMonadIO (GetTime next) = liftIO getCurrentTime >>= next
+evalPeerMonadIO (Throw e next) = Catch.throwM e *> next
+evalPeerMonadIO (Catch action handler ) =
+  Catch.catch action handler
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
@@ -392,8 +401,8 @@ requestNextPiece = do
       Nothing -> return () -- putStrLn "we have all dem pieces"
       Just ix -> do
         let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
-        case {-# SCC lookup #-} Map.lookup ix chunks of
-          Just (chunkField, chunkData) -> {-# SCC pierszybranch #-} do
+        case Map.lookup ix chunks of
+          Just (chunkField, chunkData) -> do
             -- let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
             nextChunk <- {- if lastStage
                         then return $ unsafePerformIO $ do
@@ -402,18 +411,18 @@ requestNextPiece = do
                         else -} return $ CF.getNextChunk chunkField
             case nextChunk of
               Just (chunkField', cix) -> do
-                registerCleanup ix (fromIntegral cix)
                 let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
                     request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
                     modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
                 runMemory  $ do
                   modifyChunks (Map.insert ix (chunkField', chunkData))
+                registerCleanup ix (fromIntegral cix)
                 updatePeerData modifiedPeer
                 emit request
                 when (requestsLive modifiedPeer < maxRequestsPerPeer) $
                   requestNextPiece
               _ -> processPiece ix >> requestNextPiece
-          Nothing -> {-# SCC drugibrancz #-} do
+          Nothing -> do
             let chunksCount = chunksInPieces pieceLen defaultChunkSize
                 chunkData = B.replicate (fromIntegral pieceLen) 0
                 insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
@@ -437,14 +446,37 @@ handlePWP (Request ix offset len) = do
     emit (Piece ix offset block)
 handlePWP _ = return () -- logging?
 
+releaseCleanup :: Word32 -> Word32 -> F PeerMonad ()
+releaseCleanup pieceId chunkId = do
+  cleanups <- getCleanups
+
+  case Map.lookup (pieceId, chunkId) cleanups of
+    Just _ -> do
+      runMemory $ modifyChunks $ \chunks ->
+        case Map.lookup pieceId chunks of
+          Just (cf, d) ->
+            let cf' = CF.markMissing cf (fromIntegral chunkId)
+            in Map.insert pieceId (cf', d) chunks
+          Nothing -> chunks
+    Nothing -> pure ()
+
+  deregisterCleanup pieceId chunkId
+
 entryPoint :: F PeerMonad ()
-entryPoint = forever $ getPeerEvent >>= handler
+entryPoint = catchError (forever (getPeerEvent >>= handler)) cleanup
   where handler (PWPEvent pwp) = handlePWP pwp
         handler (SharedEvent RequestPiece) = requestNextPiece
         handler (SharedEvent Checkup) = do
           t <- getTime
           cleanups <- getCleanups
-          let timedOut = Map.filter (\(_, date) -> diffUTCTime t date > 10) cleanups
+          let timedOut = Map.filter (\date -> diffUTCTime t date > 10) cleanups
               keys = fst <$> Map.toList timedOut
           traverse_ (\(pid, cid) -> releaseCleanup pid cid) keys
-          requestNextPiece
+
+          when (Prelude.null keys) $
+            requestNextPiece
+        cleanup ConnectionLost = do
+          cleanups <- getCleanups
+          let keys = fst <$> Map.toList cleanups
+          traverse_ (\(pid, cid) -> releaseCleanup pid cid) keys
+

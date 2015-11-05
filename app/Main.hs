@@ -45,7 +45,7 @@ closePromise p = do
   res <- waitCatch p
   putStrLn "promise exited"
   case res of
-    Left e -> print e
+    Left e -> putStrLn ("with error " ++ show e)
     Right _ -> print "success & quit"
 
 progressLogger :: ClientState -> IO ()
