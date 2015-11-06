@@ -1,8 +1,8 @@
-module PeerSelectionSpec where
+module PieceSelectionSpec where
 
 import Data.AEq
 import qualified Data.Vector.Unboxed as VU
-import Network.BitTorrent.PeerSelection
+import Network.BitTorrent.PieceSelection
 import qualified Network.BitTorrent.BitField as BF
 import Numeric.IEEE
 import Test.Hspec

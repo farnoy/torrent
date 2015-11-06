@@ -24,7 +24,7 @@ library
                    , Network.BitTorrent.MetaInfo
                    , Network.BitTorrent.MemoryMonad
                    , Network.BitTorrent.PeerMonad
-                   , Network.BitTorrent.PeerSelection
+                   , Network.BitTorrent.PieceSelection
                    , Network.BitTorrent.PWP
                    , Network.BitTorrent.Types
   other-modules:   Network.BitTorrent.Utility
@@ -91,7 +91,7 @@ test-suite torrent-test
                , MetaInfoSpec
                , PWPSpec
                , PeerMonadSpec
-               , PeerSelectionSpec
+               , PieceSelectionSpec
                , SpecHelper
 
   build-depends:       base

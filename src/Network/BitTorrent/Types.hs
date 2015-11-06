@@ -10,7 +10,7 @@ import Data.Map.Strict (Map)
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.MetaInfo as Meta
-import qualified Network.BitTorrent.PeerSelection as PS
+import qualified Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Utility
 import Network.Socket
 import System.IO

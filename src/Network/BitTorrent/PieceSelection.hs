@@ -1,5 +1,5 @@
 -- | Implements a rare-first algorithm for piece selection.
-module Network.BitTorrent.PeerSelection (
+module Network.BitTorrent.PieceSelection (
   AvailabilityData
 , getNextPiece
 , addToAvailability

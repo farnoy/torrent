@@ -28,7 +28,7 @@ import Control.Concurrent.STM.TVar
 import Control.Monad.Free.Church
 import Control.Monad.STM
 import qualified Network.BitTorrent.BitField as BF
-import Network.BitTorrent.PeerSelection as PS
+import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Types
 
 -- | Encodes memory operations.

@@ -75,7 +75,7 @@ import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.MemoryMonad
-import Network.BitTorrent.PeerSelection as PS
+import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types

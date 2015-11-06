@@ -22,7 +22,7 @@ import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.MemoryMonad
 import Network.BitTorrent.PeerMonad
-import qualified Network.BitTorrent.PeerSelection as PS
+import qualified Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
 import System.Directory
