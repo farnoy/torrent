@@ -47,11 +47,8 @@ library
                  , mtl
                  , network
                  , random
-                 , resourcet
                  , stm
                  , time
-                 , unix
-                 , unordered-containers
                  , uuid
                  , vector
   default-language:    Haskell2010
@@ -74,7 +71,6 @@ executable torrent
                      , stm
                      , torrent
                      , unix
-                     , unordered-containers
                      , uuid
                      , vector
   default-language:    Haskell2010
@@ -115,11 +111,9 @@ test-suite torrent-test
                      , mtl
                      , network
                      , random
-                     , resourcet
                      , smallcheck
                      , stm
                      , time
-                     , unix
                      , unordered-containers
                      , uuid
                      , vector
