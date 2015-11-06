@@ -117,7 +117,7 @@ test-suite torrent-test
                      , unordered-containers
                      , uuid
                      , vector
-  ghc-options:         -O -Wall -fno-warn-name-shadowing
+  ghc-options:         -O -auto-all -caf-all -fprof-auto -Wall -fno-warn-name-shadowing
   cpp-options: -DTESTING
   default-language:    Haskell2010
 
