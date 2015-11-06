@@ -28,6 +28,9 @@ module Network.BitTorrent.PeerMonad (
 
 -- * Actions
 , entryPoint
+#ifdef TESTING
+, requestNextPiece
+#endif
 
 -- * Operations
 , runMemory
