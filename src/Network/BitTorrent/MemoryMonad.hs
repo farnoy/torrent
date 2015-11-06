@@ -4,6 +4,7 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE CPP #-}
 
+-- | Provides atomic transactions on shared memory.
 module Network.BitTorrent.MemoryMonad (
 #ifdef TESTING
   MemoryMonad(..)
@@ -30,6 +31,7 @@ import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.PeerSelection as PS
 import Network.BitTorrent.Types
 
+-- | Encodes memory operations.
 data MemoryMonad a = GetChunks (Chunks -> a)
                    | ModifyChunks (Chunks -> Chunks) a
                    | ReadBitfield (BF.BitField -> a)
@@ -38,26 +40,39 @@ data MemoryMonad a = GetChunks (Chunks -> a)
                    | ModifyAvailability (AvailabilityData -> AvailabilityData) a
                    deriving(Functor)
 
+-- | Gets 'Chunks'.
 getChunks :: F MemoryMonad Chunks
 getChunks = liftF $ GetChunks id
 {-# INLINABLE getChunks #-}
 
+-- | Modifies 'Chunks'.
 modifyChunks :: (Chunks -> Chunks) -> F MemoryMonad ()
 modifyChunks mut = liftF $ ModifyChunks mut ()
 {-# INLINABLE modifyChunks #-}
 
+-- | Gets 'BF.BitField'.
 getBitfield :: F MemoryMonad BF.BitField
 getBitfield = liftF $ ReadBitfield id
 {-# INLINABLE getBitfield #-}
 
+-- | Modifies 'BF.BitField'.
 modifyBitfield :: (BF.BitField -> BF.BitField) -> F MemoryMonad ()
 modifyBitfield mut = liftF $ ModifyBitfield mut ()
 {-# INLINABLE modifyBitfield #-}
 
+-- | Gets 'AvailabilityData'.
 getAvailability :: F MemoryMonad AvailabilityData
 getAvailability = liftF $ ReadAvailability id
 {-# INLINABLE getAvailability #-}
 
+-- | Modifies 'AvailabilityData'.
+--
+-- Always remember to subtract your previous contribution to
+-- availability if applicable:
+--
+-- @
+-- modifyAvailability $ addToAvailability newBf . removeFromAvailability oldBf
+-- @
 modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F MemoryMonad ()
 modifyAvailability mut = liftF $ ModifyAvailability mut ()
 {-# INLINABLE modifyAvailability #-}
@@ -82,5 +97,6 @@ evalMemoryMonad state (ModifyAvailability mut next) = do
   modifyTVar' (availabilityData state) mut
   next
 
+-- | Runs the whole transaction atomically under STM.
 runMemoryMonadSTM :: ClientState -> F MemoryMonad a -> STM a
 runMemoryMonadSTM state = iterM (evalMemoryMonad state)

@@ -49,7 +49,7 @@ spec = do
   it "setting bits does not change data size" $ property $ \len ->
     forAll $ \ix -> ix >= len ==>
       let field = BF.set (BF.newBitField len) ix True
-      in BF.lengthRaw field == (ceiling $ fromIntegral len / 8)
+      in B.length (BF.raw field) == (ceiling $ fromIntegral len / 8)
 
   it "setting bits does not change reported size" $ property $ \len ->
     forAll $ \ix -> ix < len ==>

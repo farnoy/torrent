@@ -24,6 +24,7 @@ import Network.BitTorrent.Client
 import qualified Network.BitTorrent.FileWriter as FW
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.PWP
+import Network.BitTorrent.Types
 import Network.Socket
 import SpecHelper
 import System.Directory

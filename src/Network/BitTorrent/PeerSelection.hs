@@ -1,6 +1,7 @@
+-- | Implements a rare-first algorithm for piece selection.
 module Network.BitTorrent.PeerSelection (
-  getNextPiece
-, AvailabilityData
+  AvailabilityData
+, getNextPiece
 , addToAvailability
 , removeFromAvailability
 , getIncompletePieces
@@ -13,19 +14,25 @@ import Network.BitTorrent.BitField (BitField)
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.Utility
 
+-- | Stores availability - the number of peers that have data - for each piece.
 type AvailabilityData = VU.Vector Word32
 
+-- | Adds a 'BitField' to availability cache.
 addToAvailability :: BitField -> AvailabilityData -> AvailabilityData
 addToAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1])
   where f n = (fromIntegral n, (av ! n) + boolToWord (BF.get bf (fromIntegral n)))
 {-# INLINABLE addToAvailability #-}
 
+-- | Removes a 'BitField' from availability cache.
 removeFromAvailability :: BitField -> AvailabilityData -> AvailabilityData
 removeFromAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1])
   where f n = (fromIntegral n, (av ! n) - boolToWord (BF.get bf (fromIntegral n)))
 {-# INLINABLE removeFromAvailability #-}
 
-getNextPiece :: BitField -> AvailabilityData -> Maybe Word32
+-- | Gets the next incomplete piece according to our algorithm.
+getNextPiece :: BitField -- ^ download progress
+             -> AvailabilityData -- ^ availability
+             -> Maybe Word32
 getNextPiece bf av = fromIntegral . fst <$> g
   where g = VU.ifoldl' (\counter index availability -> if BF.get bf (fromIntegral index)
             then counter
@@ -37,5 +44,7 @@ getNextPiece bf av = fromIntegral . fst <$> g
             ) Nothing av
 {-# INLINABLE getNextPiece #-}
 
+-- | Retrieves all incomplete pieces.
+getIncompletePieces :: BitField -> [Word32]
 getIncompletePieces bf = filter (not . BF.get bf) [0..BF.length bf - 1]
 {-# INLINABLE getIncompletePieces #-}

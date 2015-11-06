@@ -1,6 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
-module Network.BitTorrent.PWP where
+-- | Provides means to communicate over the Peer Wire Protocol.
+-- You can encode and decode messages using the 'Binary' instances.
+module Network.BitTorrent.PWP (
+  PWP(..)
+, BHandshake(..)
+) where
 
 import Control.Monad
 import Data.Binary
@@ -12,16 +17,17 @@ import qualified Data.ByteString as B
 protocolString :: ByteString
 protocolString = "BitTorrent protocol"
 
+-- | Encodes all the messages in PWP.
 data PWP = KeepAlive
          | Choke
          | Unchoke
          | Interested
          | Uninterested
-         | Have Word32
+         | Have Word32 -- ^ PieceId
          | Bitfield ByteString
-         | Request Word32 Word32 Word32
-         | Piece Word32 Word32 ByteString
-         | Cancel Word32 Word32 Word32
+         | Request Word32 Word32 Word32 -- ^ PieceId Offset Length
+         | Piece Word32 Word32 ByteString -- ^ PieceId Offset Data
+         | Cancel Word32 Word32 Word32 -- ^ PieceId Offset Length
          deriving(Show, Eq)
 
 putPieceDescription :: Word32 -> Word32 -> Word32 -> Put
@@ -90,7 +96,11 @@ instance Binary PWP where
           _ -> fail "incorrect!"
   {-# INLINABLE get #-}
 
-data BHandshake = BHandshake ByteString ByteString deriving(Show, Eq)
+-- | Encodes the BHandshake message.
+data BHandshake = BHandshake
+  { handshakeInfoHash :: ByteString -- ^ Info hash of the torrent
+  , handshakePeerId   :: ByteString -- ^ Peer's ID
+  } deriving(Show, Eq)
 
 instance Binary BHandshake where
   put (BHandshake infoHash peerId) = do

@@ -4,18 +4,32 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE CPP #-}
 
+-- | Provides definiton for 'PeerMonad' and an IO based implementation
+-- for actual connections to use in the real world.
+--
+-- Expressions in the 'PeerMonad' use a number of backend-implemented
+-- operations to implement their logic.
+-- The main expression in this module is 'entryPoint' - the peer loop.
+-- It evaluates events, interacts with the peer and uses shared memory
+-- to coordinate with other peer loops.
 module Network.BitTorrent.PeerMonad (
-  runPeerMonad
-, entryPoint
-, PeerError(..)
-
+-- * PeerMonad
 #ifdef TESTING
-, PeerMonad(..)
+  PeerMonad(..)
 , PeerEvent(..)
 , handlePWP
+#else
+  PeerMonad()
 #endif
+, runPeerMonad
+, PeerEvent(..)
+, PeerError(..)
+, Cleanups
 
--- ops
+-- * Actions
+, entryPoint
+
+-- * Operations
 , runMemory
 , getPeerData
 , emit
@@ -70,6 +84,14 @@ import System.IO.Error
 import System.IO.Unsafe
 import System.Random hiding(next)
 
+-- | Maps (PieceId, ChunkId) pair with a timestamp.
+--
+-- It's used to store when a request for a chunk was made
+-- so we can time out if a peer has not responded for long enough.
+--
+-- Comes in handy when the connection to a peer is lost -
+-- we can then revert the downloads of chunks by marking
+-- them as missing again.
 type Cleanups = Map (Word32, Word32) UTCTime
 
 data PeerState = PeerState { peerStateData :: !PeerData
@@ -78,15 +100,20 @@ data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateCleanups :: Cleanups
                            }
 
+-- | Encodes exceptions that can happen in a peer loop.
 data PeerError = ConnectionLost deriving(Eq,Show)
-
 instance Exception PeerError
 
 -- TODO Logger
 type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState IO))
 
+-- | Encodes possible events that arrive in the 'PeerMonad'.
+--
+-- Retrieved by using 'getPeerEvent'.
 data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage deriving(Eq,Show)
 
+-- | Encodes all possible operations on the PeerMonad.
+-- Higher level operations use these to implement the protocol logic.
 data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetPeerData (PeerData -> a)
                 | Emit PWP a
@@ -124,67 +151,107 @@ peerUnchoked = do
   updatePeerData $ peerData { peerChoking = False }
 {-# INLINABLE peerUnchoked #-}
 
+-- | Run a MemoryMonad expression as a single, atomic transaction.
 runMemory :: F MemoryMonad a -> F PeerMonad a
 runMemory stm = liftF $ RunMemory stm id
 {-# INLINABLE runMemory #-}
 
+-- | Get 'PeerData'.
 getPeerData :: F PeerMonad PeerData
 getPeerData = liftF $ GetPeerData id
 {-# INLINABLE getPeerData #-}
 
+-- | Send a message to the peer.
 emit :: PWP -> F PeerMonad ()
 emit pwp = liftF $ Emit pwp ()
 {-# INLINABLE emit #-}
 
+-- | Get 'MetaInfo'.
 getMeta :: F PeerMonad MetaInfo
 getMeta = liftF $ GetMeta id
 {-# INLINABLE getMeta #-}
 
-readData :: Word32 -> Word32 -> F PeerMonad ByteString
+-- | Read data from disk.
+readData :: Word32  -- ^ offset
+         -> Word32  -- ^ length
+         -> F PeerMonad ByteString
 readData o l = liftF $ ReadData o l id
 {-# INLINABLE readData #-}
 
-writeData :: Word32 -> ByteString -> F PeerMonad ()
+-- | Write data to disk.
+writeData :: Word32 -- ^ offset
+          -> ByteString -- ^ data
+          -> F PeerMonad ()
 writeData o b = liftF $ WriteData o b ()
 {-# INLINABLE writeData #-}
 
+-- | Updates 'PeerData'.
+-- Because the peer loop is the only owner, it's
+-- safe to modify at any time and does not need to run in the 'MemoryMonad'.
 updatePeerData :: PeerData -> F PeerMonad ()
 updatePeerData pData = liftF $ UpdatePeerData pData ()
 {-# INLINABLE updatePeerData #-}
 
+-- | Blocks and waits on the next 'PeerEvent'.
 getPeerEvent :: F PeerMonad PeerEvent
 getPeerEvent = liftF $ GetPeerEvent id
 {-# INLINABLE getPeerEvent #-}
 
+-- | Registers a cleanup.
+--
+-- __NOTE:__ This is a temporary solution until storing
+-- custom data is provided by 'PeerMonad'.
 registerCleanup :: Word32 -> Word32 -> F PeerMonad ()
 registerCleanup pieceId chunkId = liftF $ RegisterCleanup pieceId chunkId ()
 {-# INLINABLE registerCleanup #-}
 
+-- | Removes a cleanup.
+--
+-- __NOTE:__ This is a temporary solution until storing
+-- custom data is provided by 'PeerMonad'.
 deregisterCleanup :: Word32 -> Word32 -> F PeerMonad ()
 deregisterCleanup pieceId chunkId = liftF $ DeregisterCleanup pieceId chunkId ()
 {-# INLINABLE deregisterCleanup #-}
 
+-- | Gets all remaining cleanups.
+--
+-- __NOTE:__ This is a temporary solution until storing
+-- custom data is provided by 'PeerMonad'.
 getCleanups :: F PeerMonad Cleanups
 getCleanups = liftF $ GetCleanups id
 {-# INLINABLE getCleanups #-}
 
+-- | Get current time.
+--
+-- __NOTE:__ This is a temporary solution until a nicer interface
+-- for timeouts & cancellables is implemented.
 getTime :: F PeerMonad UTCTime
 getTime = liftF $ GetTime id
 {-# INLINABLE getTime #-}
 
+-- | Throws an error.
 throwError :: PeerError -> F PeerMonad ()
 throwError err = liftF $ Throw err ()
 {-# INLINABLE throwError #-}
 
+-- | Catches errors for nested 'PeerMonad' expressions.
+--
+-- It works with asynchronous exceptions too, but masking
+-- is not supported yet.
 catchError :: F PeerMonad a -> (PeerError -> F PeerMonad a) -> F PeerMonad a
 catchError action handler = join $ liftF $ Catch action handler
 {-# INLINABLE catchError #-}
 
-runPeerMonad :: Show a =>
-                ClientState
+-- | Runs a 'PeerMonad' in the IO monad.
+--
+-- Internally spawns threads to process events from multiple sources efficiently.
+-- It forwards 'SharedMessage's and 'PWP' messages to the 'PeerMonad' to act upon.
+--
+-- Nested 'MemoryMonad' expressions are evaluated using STM.
+runPeerMonad :: ClientState
              -> PeerData
-             -> Handle
-             -> F PeerMonad a
+             -> Handle -- ^ socket handle to communicate with the peer
+             -> F PeerMonad a -- ^ PeerMonad expression to evaluate
              -> IO (Either PeerError a)
 runPeerMonad state pData outHandle t = do
   privateChan <- newChan
@@ -384,7 +451,7 @@ requestNextPiece = do
 
         bfrequestable = {- if lastStage
                           then bf
-                          else -} BF.union bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
+                          else -} BF.intersection bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
 
         incompletePieces = PS.getIncompletePieces bfrequestable
 
@@ -446,6 +513,7 @@ handlePWP (Request ix offset len) = do
     emit (Piece ix offset block)
 handlePWP _ = return () -- logging?
 
+-- | Marks the chunk as missing and deregistering the cleanup.
 releaseCleanup :: Word32 -> Word32 -> F PeerMonad ()
 releaseCleanup pieceId chunkId = do
   cleanups <- getCleanups
@@ -462,9 +530,11 @@ releaseCleanup pieceId chunkId = do
 
   deregisterCleanup pieceId chunkId
 
+-- | Runs the peer loop, processing all events.
 entryPoint :: F PeerMonad ()
-entryPoint = catchError (forever (getPeerEvent >>= handler)) cleanup
-  where handler (PWPEvent pwp) = handlePWP pwp
+entryPoint = catchError processEvent cleanup
+  where processEvent = forever (getPeerEvent >>= handler)
+        handler (PWPEvent pwp) = handlePWP pwp
         handler (SharedEvent RequestPiece) = requestNextPiece
         handler (SharedEvent Checkup) = do
           t <- getTime

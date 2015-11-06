@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+-- | Parses Bencoded values.
 module Network.BitTorrent.Bencoding (
   value
 , BValue(..)
@@ -17,6 +18,7 @@ import Data.Monoid
 import Data.Word
 import Prelude hiding (take)
 
+-- | Holds a Bencoded value.
 data BValue = String ByteString
             | Number Word32
             | List [BValue]
@@ -48,10 +50,12 @@ dictionary = do
   return $ Dictionary map'
 {-# INLINABLE dictionary #-}
 
+-- | Parser for a Bencoded value.
 value :: Parser BValue
 value = string <|> number <|> list <|> dictionary
 {-# INLINABLE value #-}
 
+-- | Serializer for a Bencoded value.
 serialize :: BValue -> ByteString
 serialize (String s) = BC.pack (show $ B.length s) <> ":" <> s
 serialize (Number s) = "i" <> BC.pack (show s) <> "e"

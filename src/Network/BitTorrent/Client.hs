@@ -1,16 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
+-- | Implements most of the connection handling
+-- and initiates peer loops.
 module Network.BitTorrent.Client (
   newClientState
 , newPeer
 , btListen
 , globalPort
 , queryTracker
-, PeerData(..)
-, ClientState(..)
 , reachOutToPeer
-, mainPeerLoop
-, expectedChunkSize
 ) where
 
 import Control.Concurrent
@@ -49,12 +47,11 @@ import System.IO
 globalPort :: Word16
 globalPort = 8035
 
-newPeer :: BF.BitField -> SockAddr -> ByteString -> PeerData
-newPeer bf addr peer =
-  PeerData True False True False addr peer bf 0
-{-# INLINABLE newPeer #-}
-
-newClientState :: FilePath -> MetaInfo -> Word16 -> IO ClientState
+-- | Create a 'ClientState'.
+newClientState :: FilePath -- ^ Output directory for downloaded files
+               -> MetaInfo
+               -> Word16 -- ^ Listen port
+               -> IO ClientState
 newClientState dir meta listenPort = do
   chunks <- newTVarIO Map.empty
   uuid <- nextRandom
@@ -68,6 +65,9 @@ newClientState dir meta listenPort = do
   sharedMessages <- newChan
   return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData sharedMessages
 
+-- | Listen for connections.
+-- Creates a new thread that accepts connections and spawns peer loops
+-- with them.
 btListen :: ClientState -> IO Socket
 btListen state = do
   sock <- socket AF_INET Stream defaultProtocol
@@ -96,7 +96,7 @@ startFromPeerHandshake state sock addr = do
     bf <- atomically $
       readTVar (bitField state)
 
-    BL.hPut handle (encode $ Bitfield $ BF.raw bf)
+    BL.hPut handle (encode $ BF.toPWP bf)
 
     mainPeerLoop state pData handle
     pure ()
@@ -104,6 +104,7 @@ startFromPeerHandshake state sock addr = do
 pieceCount :: ClientState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
 
+-- | Reach out to peer located at the address and enter the peer loop.
 reachOutToPeer :: ClientState -> SockAddr -> IO ()
 reachOutToPeer state addr = do
   sock <- socket AF_INET Stream defaultProtocol
@@ -144,6 +145,7 @@ messageStream input =
     Left _ -> []
     Right (rest, _, msg) -> msg : messageStream rest
 
+-- | Ask the tracker for peers and return the result addresses.
 queryTracker :: ClientState -> IO [SockAddr]
 queryTracker state = do
   let meta = metaInfo state

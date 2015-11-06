@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+-- | Parses MetaInfo into a convenient structure.
 module Network.BitTorrent.MetaInfo (
   MetaInfo(..)
 , InfoDictionary(..)
@@ -12,6 +13,7 @@ import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 
+-- | Holds the info dictionary as described in the specification.
 data InfoDictionary = InfoDictionary {
                       pieceLength :: Word32
                     , pieces :: ByteString
@@ -20,6 +22,7 @@ data InfoDictionary = InfoDictionary {
                     , length :: Word32
                     } deriving(Eq, Show)
 
+-- | Holds MetaInfo data as described in the specification.
 data MetaInfo = MetaInfo {
                   info :: InfoDictionary
                 , infoHash :: ByteString
@@ -27,6 +30,7 @@ data MetaInfo = MetaInfo {
                 , creationDate :: Maybe Word32
                 } deriving(Eq, Show)
 
+-- | Parses a 'BValue' to extract the MetaInfo dictionary.
 parseMetaInfo :: BValue -> Maybe MetaInfo
 parseMetaInfo bv = MetaInfo
                      <$> ((bv ^? bkey "info") >>= parseInfoDictionary)

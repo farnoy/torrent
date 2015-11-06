@@ -1,3 +1,4 @@
+{-# OPTIONS_HADDOCK hide #-}
 module Network.BitTorrent.Utility (
   divideSize
 , boolToWord

@@ -1,15 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
+-- | Provides operations for BitFields that are used in the protocol.
 module Network.BitTorrent.BitField (
   BitField(..)
 , newBitField
-, Network.BitTorrent.BitField.length
-, lengthRaw
-, raw
+, fromChunkFields
 , get
 , set
 , completed
-, fromChunkFields
-, union
+, intersection
+, toPWP
 ) where
 
 import Data.Bits
@@ -19,16 +18,33 @@ import qualified Data.ByteString as B
 import Data.Monoid
 import Data.Word
 import Network.BitTorrent.ChunkField as CF
+import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 
-data BitField = BitField ByteString Word32 deriving(Show, Eq)
+-- | Holds the completion status of pieces.
+-- Works by using tightly packed bits to store this information efficiently.
+-- Can describe 8 piece statuses per byte.
+data BitField = BitField
+  { raw :: ByteString -- ^ Raw byte array.
+  , length :: Word32 -- ^ Length of the bitfield.
+  } deriving(Show, Eq)
 
+-- | /O(n)/ Creates a new bitfield with the specified length.
+-- Starts out with all pieces marked as unfinished.
 newBitField :: Word32 -> BitField
 newBitField len = BitField (B.replicate (fromIntegral byteLength) 0) len
   where byteLength = divideSize len 8
 {-# INLINABLE newBitField #-}
 
-fromChunkFields :: Word32 -> [(Word32, ChunkField)] -> BitField
+-- | /O(n)/ Creates a bitfield out of multiple 'ChunkField's.
+-- ChunkFields that satisfy 'CF.isRequested' are marked
+-- as completed pieces in the resulting 'BitField'.
+--
+-- This is useful for figuring out which pieces are incomplete
+-- but have been requested, particularly with `intersection`.
+fromChunkFields :: Word32 -- ^ Length of the new BitField
+                -> [(Word32, ChunkField)] -- ^ Pairs of Piece ID and 'ChunkField'
+                -> BitField
 fromChunkFields len chunksOriginal =
   BitField (snd $ B.mapAccumL f (0, chunksOriginal) fresh) len
   where byteLength = divideSize len 8
@@ -46,30 +62,25 @@ fromChunkFields len chunksOriginal =
         {-# INLINABLE g #-}
 
 
-union :: BitField -> BitField -> BitField
-union (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
+-- | /O(n)/ Returns the intersection of both bitfields.
+intersection :: BitField -> BitField -> BitField
+intersection (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
   where f ix w = (ix + 1, w .|. B.index b ix)
         {-# INLINABLE f #-}
 
-length :: BitField -> Word32
-length (BitField _ s) = s
-{-# INLINABLE length #-}
-
-lengthRaw :: BitField -> Word32
-lengthRaw (BitField b _) = fromIntegral $ B.length b
-{-# INLINABLE lengthRaw #-}
-
-raw :: BitField -> ByteString
-raw (BitField b _) = b
-{-# INLINABLE raw #-}
-
+-- | /O(1)/ Get the status of a single piece.
 get :: BitField -> Word32 -> Bool
 get (BitField field _) ix = testBit word (7 - fromIntegral ix `rem` 8)
   where byteIx =  fromIntegral $ ix `quot` 8
         word =  B.index field byteIx
 {-# INLINABLE get #-}
 
-set :: BitField -> Word32 -> Bool -> BitField
+-- | /O(n)/ Sets the status of a single piece by returning a new
+-- bitfield with the change applied.
+set :: BitField
+    -> Word32 -- ^ Piece ID
+    -> Bool -- ^ New status
+    -> BitField
 set (BitField field len) ix val = (BitField $! updatedField) $! len
   where byteIx = fromIntegral ix `quot` 8
         word = B.index field byteIx
@@ -79,6 +90,13 @@ set (BitField field len) ix val = (BitField $! updatedField) $! len
         updatedField = B.take byteIx field <> B.singleton updatedByte <> B.drop (byteIx + 1) field
 {-# INLINABLE set #-}
 
-completed :: BitField -> Float
-completed (BitField b len) = fromIntegral (Foldable.sum (popCount <$> B.unpack b)) / fromIntegral len
+-- | /O(n)/ Get the ratio of completed pieces.
+completed :: BitField
+          -> Float -- ^ Result in range /[0;1]/
+completed (BitField b len) = fromIntegral (Foldable.sum (B.unpack b)) / fromIntegral len
 {-# INLINABLE completed #-}
+
+-- | /O(1)/ Cast the BitField to a PWP message.
+toPWP :: BitField -> PWP
+toPWP (BitField raw _) = Bitfield raw
+{-# INLINABLE toPWP #-}
