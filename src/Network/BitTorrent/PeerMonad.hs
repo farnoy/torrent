@@ -437,68 +437,68 @@ handleInterested = do
 requestNextPiece :: F PeerMonad ()
 requestNextPiece = do
   peerData <- getPeerData
-  unless (peerChoking peerData) $ do
-    (chunks, bf, avData) <- runMemory $ do
-      chunks <- getChunks
-      avData <- getAvailability
-      bf <- getBitfield
-      return (chunks, bf, avData)
-    meta <- getMeta
-    let pbf = peerBitField peerData
-        infoDict = info meta
-        defaultPieceLen :: Word32
-        defaultPieceLen = pieceLength infoDict
-        totalSize = Meta.length infoDict
+  when (requestsLive peerData < maxRequestsPerPeer) $ do
+    unless (peerChoking peerData) $ do
+      (chunks, bf, avData) <- runMemory $ do
+        chunks <- getChunks
+        avData <- getAvailability
+        bf <- getBitfield
+        return (chunks, bf, avData)
+      meta <- getMeta
+      let pbf = peerBitField peerData
+          infoDict = info meta
+          defaultPieceLen :: Word32
+          defaultPieceLen = pieceLength infoDict
+          totalSize = Meta.length infoDict
 
-        lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
+          lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
 
-        bfrequestable = {- if lastStage
-                          then bf
-                          else -} BF.intersection bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
+          bfrequestable = {- if lastStage
+                            then bf
+                            else -} BF.intersection bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
 
-        incompletePieces = PS.getIncompletePieces bfrequestable
+          incompletePieces = PS.getIncompletePieces bfrequestable
 
-    nextPiece <- {- if lastStage
-                   then do
-                     if Prelude.length incompletePieces - 1 > 0
-                       then return $ unsafePerformIO $ do
-                         rand <- randomRIO (0, Prelude.length incompletePieces - 1)
-                         return $ Just $ incompletePieces !! rand
-                       else return Nothing
-                   else -} pure $ PS.getNextPiece bfrequestable avData
+      nextPiece <- {- if lastStage
+                     then do
+                       if Prelude.length incompletePieces - 1 > 0
+                         then return $ unsafePerformIO $ do
+                           rand <- randomRIO (0, Prelude.length incompletePieces - 1)
+                           return $ Just $ incompletePieces !! rand
+                         else return Nothing
+                     else -} pure $ PS.getNextPiece bfrequestable avData
 
-    case nextPiece of
-      Nothing -> return () -- putStrLn "we have all dem pieces"
-      Just ix -> do
-        let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
-        case Map.lookup ix chunks of
-          Just (chunkField, chunkData) -> do
-            -- let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
-            nextChunk <- {- if lastStage
-                        then return $ unsafePerformIO $ do
-                          rand <- randomRIO (0, Prelude.length incomplete - 1)
-                          return $ Just (cf, incomplete !! rand)
-                        else -} return $ CF.getNextChunk chunkField
-            case nextChunk of
-              Just (chunkField', cix) -> do
-                let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
-                    request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
-                    modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-                runMemory  $ do
-                  modifyChunks (Map.insert ix (chunkField', chunkData))
-                registerCleanup ix (fromIntegral cix)
-                updatePeerData modifiedPeer
-                emit request
-                when (requestsLive modifiedPeer < maxRequestsPerPeer) $
+      case nextPiece of
+        Nothing -> return () -- putStrLn "we have all dem pieces"
+        Just ix -> do
+          let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
+          case Map.lookup ix chunks of
+            Just (chunkField, chunkData) -> do
+              -- let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
+              nextChunk <- {- if lastStage
+                          then return $ unsafePerformIO $ do
+                            rand <- randomRIO (0, Prelude.length incomplete - 1)
+                            return $ Just (cf, incomplete !! rand)
+                          else -} return $ CF.getNextChunk chunkField
+              case nextChunk of
+                Just (chunkField', cix) -> do
+                  let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
+                      request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
+                      modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
+                  runMemory  $ do
+                    modifyChunks (Map.insert ix (chunkField', chunkData))
+                  registerCleanup ix (fromIntegral cix)
+                  updatePeerData modifiedPeer
+                  emit request
                   requestNextPiece
-              _ -> processPiece ix >> requestNextPiece
-          Nothing -> do
-            let chunksCount = chunksInPieces pieceLen defaultChunkSize
-                chunkData = B.replicate (fromIntegral pieceLen) 0
-                insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
-            runMemory $
-              modifyChunks $ Map.insert ix insertion
-            requestNextPiece
+                _ -> processPiece ix >> requestNextPiece
+            Nothing -> do
+              let chunksCount = chunksInPieces pieceLen defaultChunkSize
+                  chunkData = B.replicate (fromIntegral pieceLen) 0
+                  insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
+              runMemory $
+                modifyChunks $ Map.insert ix insertion
+              requestNextPiece
 
 handlePWP :: PWP -> F PeerMonad ()
 handlePWP Unchoke = peerUnchoked >> requestNextPiece

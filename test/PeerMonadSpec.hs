@@ -151,7 +151,7 @@ spec = do
       bf = BF.BitField (B.replicate pieceCount maxBound) pieceCount
       pData = newPeer bf addr peerId
 
-  describe "PeerMonad" $ do
+  describe "PeerMonad" $ parallel $ do
     describe "handlePWP" $ do
       describe "for Have message" $ do
         it "properly adjust the peer bitfield" $ do
@@ -173,6 +173,14 @@ spec = do
 
         peerStateOutputs <$> peerState `shouldBe` Right []
 
+      it "is a noop when live requests exceed the limit" $ do
+        let exp = requestNextPiece
+            pData' = pData { peerChoking = False, requestsLive = maxRequestsPerPeer }
+            res = runPeerMonadTest state pData' memory [] exp refTime
+            peerState = snd <$> res
+
+        null . peerStateOutputs <$> peerState `shouldBe` Right True
+
       it "requests the next first piece" $ do
         let exp = requestNextPiece
             pData' = pData { peerChoking = False }
@@ -182,7 +190,7 @@ spec = do
         fst <$> res `shouldBe` Right ()
         elem (Request 0 0 (2^14)) . peerStateOutputs <$> peerState `shouldBe` Right True
 
-  describe "PeerMonadTest" $ do
+  describe "PeerMonadTest" $ parallel $ do
     describe "exception handling" $ do
       describe "on getPeerEvent" $ do
         it "throws ConnectionLost after all messages" $ do
