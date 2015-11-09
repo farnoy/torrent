@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE CPP #-}
 
 -- | Provides definiton for 'PeerMonad' and an IO based implementation
@@ -322,7 +321,7 @@ evalPeerMonadIO (GetPeerEvent next) = do
 evalPeerMonadIO (RegisterCleanup pieceId chunkId next) = do
   pState <- get
 
-  t <- liftIO $ getCurrentTime
+  t <- liftIO getCurrentTime
   put $ pState { peerStateCleanups =
                  Map.insert (pieceId, chunkId)
                             t
@@ -333,7 +332,7 @@ evalPeerMonadIO (DeregisterCleanup pieceId chunkId next) = do
   let cleanups = peerStateCleanups pState
 
   case Map.lookup (pieceId, chunkId) cleanups of
-    Just _ -> do
+    Just _ ->
       put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
     Nothing -> pure ()
 
@@ -379,9 +378,9 @@ processPiece ix = do
   Just (chunkField, d) <- runMemory (Map.lookup ix <$> getChunks)
   when (CF.isCompleted chunkField) $ do
     meta <- getMeta
-    let infoDict = info $ meta
+    let infoDict = info meta
         pieces' = pieces infoDict
-        defaultPieceLen = pieceLength $ info $ meta
+        defaultPieceLen = pieceLength $ info meta
         getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
         hashCheck = hash d == getPieceHash ix
 
@@ -423,7 +422,7 @@ handleHave ix = do
   let oldBf = peerBitField peerData
       newBf = BF.set oldBf ix True
       peerData' = peerData { peerBitField = newBf }
-  runMemory $ do
+  runMemory $
     modifyAvailability $ PS.addToAvailability newBf . PS.removeFromAvailability oldBf
   updatePeerData peerData'
 
@@ -437,7 +436,7 @@ handleInterested = do
 requestNextPiece :: F PeerMonad ()
 requestNextPiece = do
   peerData <- getPeerData
-  when (requestsLive peerData < maxRequestsPerPeer) $ do
+  when (requestsLive peerData < maxRequestsPerPeer) $
     unless (peerChoking peerData) $ do
       (chunks, bf, avData) <- runMemory $ do
         chunks <- getChunks
@@ -475,17 +474,17 @@ requestNextPiece = do
           case Map.lookup ix chunks of
             Just (chunkField, chunkData) -> do
               -- let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
-              nextChunk <- {- if lastStage
+              let nextChunk = {- if lastStage
                           then return $ unsafePerformIO $ do
                             rand <- randomRIO (0, Prelude.length incomplete - 1)
                             return $ Just (cf, incomplete !! rand)
-                          else -} return $ CF.getNextChunk chunkField
+                          else -} CF.getNextChunk chunkField
               case nextChunk of
                 Just (chunkField', cix) -> do
                   let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
                       request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
                       modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-                  runMemory  $ do
+                  runMemory $
                     modifyChunks (Map.insert ix (chunkField', chunkData))
                   registerCleanup ix (fromIntegral cix)
                   updatePeerData modifiedPeer
@@ -522,7 +521,7 @@ releaseCleanup pieceId chunkId = do
   cleanups <- getCleanups
 
   case Map.lookup (pieceId, chunkId) cleanups of
-    Just _ -> do
+    Just _ ->
       runMemory $ modifyChunks $ \chunks ->
         case Map.lookup pieceId chunks of
           Just (cf, d) ->
@@ -544,12 +543,11 @@ entryPoint = catchError processEvent cleanup
           cleanups <- getCleanups
           let timedOut = Map.filter (\date -> diffUTCTime t date > 10) cleanups
               keys = fst <$> Map.toList timedOut
-          traverse_ (\(pid, cid) -> releaseCleanup pid cid) keys
+          traverse_ (uncurry releaseCleanup) keys
 
-          when (Prelude.null keys) $
-            requestNextPiece
+          when (Prelude.null keys) requestNextPiece
         cleanup ConnectionLost = do
           cleanups <- getCleanups
           let keys = fst <$> Map.toList cleanups
-          traverse_ (\(pid, cid) -> releaseCleanup pid cid) keys
+          traverse_ (uncurry releaseCleanup) keys
 

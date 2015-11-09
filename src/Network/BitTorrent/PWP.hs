@@ -13,6 +13,7 @@ import Data.Binary.Get
 import Data.Binary.Put
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import Data.Foldable
 
 protocolString :: ByteString
 protocolString = "BitTorrent protocol"
@@ -31,7 +32,7 @@ data PWP = KeepAlive
          deriving(Show, Eq)
 
 putPieceDescription :: Word32 -> Word32 -> Word32 -> Put
-putPieceDescription p o l = traverse put [p, o, l] >> return ()
+putPieceDescription p o l = traverse_ put [p, o, l]
 {-# INLINABLE putPieceDescription #-}
 
 instance Binary PWP where
