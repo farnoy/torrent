@@ -13,7 +13,6 @@ module Network.BitTorrent.Client (
 
 import Control.Concurrent
 import Control.Concurrent.STM.TVar
-import Control.Exception.Base
 import Control.Monad
 import Control.Monad.STM
 import Crypto.Hash.SHA1
@@ -22,7 +21,6 @@ import Data.Binary.Get
 import qualified Data.Attoparsec.ByteString.Char8 as AC
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.ByteString.Internal as BI
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Map.Strict as Map
@@ -138,12 +136,6 @@ readHandshake handle = do
 mainPeerLoop :: ClientState -> PeerData -> Handle -> IO (Either PeerError ())
 mainPeerLoop state pData handle =
   runPeerMonad state pData handle entryPoint
-
-messageStream :: BL.ByteString -> [PWP]
-messageStream input =
-  case runGetOrFail get input of
-    Left _ -> []
-    Right (rest, _, msg) -> msg : messageStream rest
 
 -- | Ask the tracker for peers and return the result addresses.
 queryTracker :: ClientState -> IO [SockAddr]

@@ -5,7 +5,6 @@ module Main where
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
-import Control.Concurrent.STM.TVar
 import Control.Monad
 import qualified Data.Attoparsec.ByteString.Lazy as AL
 import qualified Data.ByteString.Lazy as BL
@@ -33,20 +32,22 @@ main = do
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
       -- dont do this here in the future
-      forkIO $ progressLogger clientState
-      forkIO $ sharedMessagesLogger clientState
-      forkIO $ periodicCheckup clientState
-      installHandler sigINT (CatchOnce (traverse_ cancel promises)) Nothing
-      traverse_ closePromise promises
+      void $ forkIO $ progressLogger clientState
+      void $ forkIO $ sharedMessagesLogger clientState
+      void $ forkIO $ periodicCheckup clientState
+      void $ installHandler sigINT (CatchOnce (traverse_ cancel promises)) Nothing
+      waitOnPeers promises
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
 
-closePromise p = do
-  res <- waitCatch p
+waitOnPeers :: [Async a] -> IO ()
+waitOnPeers promises = do
+  (finished, res) <- waitAnyCatch promises
   putStrLn "promise exited"
   case res of
     Left e -> putStrLn ("with error " ++ show e)
-    Right _ -> print "success & quit"
+    Right _ -> putStrLn "success & quit"
+  waitOnPeers (filter (/= finished) promises)
 
 progressLogger :: ClientState -> IO ()
 progressLogger state = forever $ do

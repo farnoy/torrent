@@ -165,16 +165,16 @@ spec = do
             res = fst <$> runPeerMonadTest state pData memory [] exp refTime
         res `shouldBe` Right 2
 
-    describe "requestNextPiece" $ do
+    describe "requestNextChunk" $ do
       it "is a noop when peer is choking us" $ do
-        let exp = requestNextPiece
+        let exp = requestNextChunk
             res = runPeerMonadTest state pData memory [] exp refTime
             peerState = snd <$> res
 
         peerStateOutputs <$> peerState `shouldBe` Right []
 
       it "is a noop when live requests exceed the limit" $ do
-        let exp = requestNextPiece
+        let exp = requestNextChunk
             pData' = pData { peerChoking = False, requestsLive = maxRequestsPerPeer }
             res = runPeerMonadTest state pData' memory [] exp refTime
             peerState = snd <$> res
@@ -182,7 +182,7 @@ spec = do
         null . peerStateOutputs <$> peerState `shouldBe` Right True
 
       it "requests the next first piece" $ do
-        let exp = requestNextPiece
+        let exp = requestNextChunk
             pData' = pData { peerChoking = False }
             res = runPeerMonadTest state pData' memory [] exp refTime
             peerState = snd <$> res

@@ -28,7 +28,7 @@ module Network.BitTorrent.PeerMonad (
 -- * Actions
 , entryPoint
 #ifdef TESTING
-, requestNextPiece
+, requestNextChunk
 #endif
 
 -- * Operations
@@ -51,7 +51,6 @@ module Network.BitTorrent.PeerMonad (
 
 import Control.Concurrent
 import Control.Concurrent.Async
-import Control.Concurrent.STM.TVar
 import Control.Monad
 import Control.Monad.Catch hiding(throwM, catch)
 import qualified Control.Monad.Catch as Catch
@@ -67,7 +66,6 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Internal as BI
 import Data.Foldable (traverse_)
-import Data.Functor.Identity
 import Data.Map.Strict as Map
 import Data.Time.Clock
 import Data.Word
@@ -82,9 +80,7 @@ import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
 import System.IO
-import System.IO.Error
 import System.IO.Unsafe
-import System.Random hiding(next)
 
 -- | Maps (PieceId, ChunkId) pair with a timestamp.
 --
@@ -146,12 +142,6 @@ instance Functor PeerMonad where
   fmap f (GetTime next) = GetTime (fmap f next)
   fmap f (Throw err next) = Throw err (f next)
   fmap f (Catch action handler) = Catch (f action) (fmap f handler)
-
-peerUnchoked :: F PeerMonad ()
-peerUnchoked = do
-  peerData <- getPeerData
-  updatePeerData $ peerData { peerChoking = False }
-{-# INLINABLE peerUnchoked #-}
 
 -- | Run a MemoryMonad expression as a single, atomic transaction.
 runMemory :: F MemoryMonad a -> F PeerMonad a
@@ -290,7 +280,8 @@ evalPeerMonadIO (GetPeerData next) = do
   PeerState pData _ _ _ <- get
   next pData
 evalPeerMonadIO (Emit pwp next) = do
-  PeerState _ _ handle _ <- get
+  state <- get
+  let handle = peerStateHandle state
   liftIO $ Catch.catchIOError
              (BL.hPut handle (Binary.encode pwp))
              (const (Catch.throwM ConnectionLost))
@@ -433,8 +424,8 @@ handleInterested = do
     emit Unchoke
     updatePeerData $ peerData { amChoking = False, peerInterested = True }
 
-requestNextPiece :: F PeerMonad ()
-requestNextPiece = do
+requestNextChunk :: F PeerMonad ()
+requestNextChunk = do
   peerData <- getPeerData
   when (requestsLive peerData < maxRequestsPerPeer) $
     unless (peerChoking peerData) $ do
@@ -450,13 +441,13 @@ requestNextPiece = do
           defaultPieceLen = pieceLength infoDict
           totalSize = Meta.length infoDict
 
-          lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
+          -- lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
 
           bfrequestable = {- if lastStage
                             then bf
                             else -} BF.intersection bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
 
-          incompletePieces = PS.getIncompletePieces bfrequestable
+          -- incompletePieces = PS.getIncompletePieces bfrequestable
 
       nextPiece <- {- if lastStage
                      then do
@@ -489,20 +480,23 @@ requestNextPiece = do
                   registerCleanup ix (fromIntegral cix)
                   updatePeerData modifiedPeer
                   emit request
-                  requestNextPiece
-                _ -> processPiece ix >> requestNextPiece
+                  requestNextChunk
+                _ -> processPiece ix >> requestNextChunk
             Nothing -> do
               let chunksCount = chunksInPieces pieceLen defaultChunkSize
                   chunkData = B.replicate (fromIntegral pieceLen) 0
                   insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
               runMemory $
                 modifyChunks $ Map.insert ix insertion
-              requestNextPiece
+              requestNextChunk
 
 handlePWP :: PWP -> F PeerMonad ()
-handlePWP Unchoke = peerUnchoked >> requestNextPiece
+handlePWP Unchoke = do
+  peerData <- getPeerData
+  updatePeerData $ peerData { peerChoking = False }
+  requestNextChunk
 handlePWP (Bitfield field) = handleBitfield field
-handlePWP (Piece ix offset d) = receiveChunk ix offset d >> requestNextPiece
+handlePWP (Piece ix offset d) = receiveChunk ix offset d >> requestNextChunk
 handlePWP (Have ix) = handleHave ix
 handlePWP Interested = handleInterested
 handlePWP (Request ix offset len) = do
@@ -537,7 +531,7 @@ entryPoint :: F PeerMonad ()
 entryPoint = catchError processEvent cleanup
   where processEvent = forever (getPeerEvent >>= handler)
         handler (PWPEvent pwp) = handlePWP pwp
-        handler (SharedEvent RequestPiece) = requestNextPiece
+        handler (SharedEvent RequestPiece) = requestNextChunk
         handler (SharedEvent Checkup) = do
           t <- getTime
           cleanups <- getCleanups
@@ -545,7 +539,7 @@ entryPoint = catchError processEvent cleanup
               keys = fst <$> Map.toList timedOut
           traverse_ (uncurry releaseCleanup) keys
 
-          when (Prelude.null keys) requestNextPiece
+          when (Prelude.null keys) requestNextChunk
         cleanup ConnectionLost = do
           cleanups <- getCleanups
           let keys = fst <$> Map.toList cleanups
