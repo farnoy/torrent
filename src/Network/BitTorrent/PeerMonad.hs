@@ -96,7 +96,7 @@ import System.IO.Unsafe
 -- Comes in handy when the connection to a peer is lost -
 -- we can then revert the downloads of chunks by marking
 -- them as missing again.
-type Cleanups = Map (Word32, Word32) UTCTime
+type Cleanups = Map (PieceId, ChunkId) UTCTime
 
 data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateChan :: Chan PeerEvent
@@ -131,8 +131,8 @@ data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | WriteData Word32 ByteString a
                 | UpdatePeerData PeerData a
                 | GetPeerEvent (PeerEvent -> a)
-                | RegisterCleanup Word32 Word32 a
-                | DeregisterCleanup Word32 Word32 a
+                | RegisterCleanup PieceId ChunkId a
+                | DeregisterCleanup PieceId ChunkId a
                 | GetCleanups (Cleanups -> a)
                 | GetTime (UTCTime -> a)
                 | Throw PeerError a
@@ -206,7 +206,7 @@ getPeerEvent = liftF $ GetPeerEvent id
 --
 -- __NOTE:__ This is a temporary solution until storing
 -- custom data is provided by 'PeerMonad'.
-registerCleanup :: Word32 -> Word32 -> F PeerMonad ()
+registerCleanup :: PieceId -> ChunkId -> F PeerMonad ()
 registerCleanup pieceId chunkId = liftF $ RegisterCleanup pieceId chunkId ()
 {-# INLINABLE registerCleanup #-}
 
@@ -214,7 +214,7 @@ registerCleanup pieceId chunkId = liftF $ RegisterCleanup pieceId chunkId ()
 --
 -- __NOTE:__ This is a temporary solution until storing
 -- custom data is provided by 'PeerMonad'.
-deregisterCleanup :: Word32 -> Word32 -> F PeerMonad ()
+deregisterCleanup :: PieceId -> ChunkId -> F PeerMonad ()
 deregisterCleanup pieceId chunkId = liftF $ DeregisterCleanup pieceId chunkId ()
 {-# INLINABLE deregisterCleanup #-}
 
@@ -359,9 +359,9 @@ evalPeerMonadIO (Catch action handler) =
   Except.catchError action handler
 evalPeerMonadIO (Log exp next) = lift (lift (lift exp)) *> next
 
-receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
+receiveChunk :: PieceId -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
-  let chunkIndex = divideSize offset defaultChunkSize
+  let chunkIndex = ChunkId (divideSize offset defaultChunkSize)
 
   chunkField <- runMemory $ do
     chunks <- getChunks
@@ -376,7 +376,7 @@ receiveChunk ix offset d = do
               dest = VS.take (B.length d) $ VS.drop (fromIntegral offset) chunkVector
               src = dataVector
           unsafePerformIO $ VS.copy dest src >> return (return ())
-        let chunkField' = CF.markCompleted chunkField (fromIntegral chunkIndex)
+        let chunkField' = CF.markCompleted chunkField chunkIndex
 
         modifyChunks $ Map.insert ix (chunkField', chunkData)
         return True
@@ -387,13 +387,13 @@ receiveChunk ix offset d = do
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
   when chunkField $ processPiece ix
 
-processPiece :: Word32 -> F PeerMonad ()
-processPiece ix = do
+processPiece :: PieceId -> F PeerMonad ()
+processPiece ix@(PieceId pieceId) = do
   meta <- getMeta
   let infoDict = info meta
       pieces' = pieces infoDict
       defaultPieceLen = pieceLength $ info meta
-      getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
+      getPieceHash (PieceId n) = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
 
   dataToWrite <- runMemory $ do
     Just (chunkField, d) <- Map.lookup ix <$> getChunks
@@ -405,9 +405,9 @@ processPiece ix = do
         if hashCheck
           then do
             bf <- getBitfield
-            if BF.get bf ix
+            if BF.get bf pieceId
               then return Nothing
-              else modifyBitfield (\bf' -> BF.set bf' ix True) *> return (Just d)
+              else modifyBitfield (\bf' -> BF.set bf' pieceId True) *> return (Just d)
           else return Nothing
                -- because we remove the entry from (pieceChunks state),
                -- but not indicate it as downloaded in the bitField,
@@ -415,7 +415,7 @@ processPiece ix = do
       False -> return Nothing
 
   case dataToWrite :: Maybe ByteString of
-    Just d -> writeData (defaultPieceLen * ix) d
+    Just d -> writeData (defaultPieceLen * pieceId) d
     Nothing -> return ()
 
 handleBitfield :: ByteString -> F PeerMonad ()
@@ -429,8 +429,8 @@ handleBitfield field = do
   updatePeerData $ peerData { peerBitField = newBitField }
   emit Interested
 
-handleHave :: Word32 -> F PeerMonad ()
-handleHave ix = do
+handleHave :: PieceId -> F PeerMonad ()
+handleHave (PieceId ix) = do
   peerData <- getPeerData
   let oldBf = peerBitField peerData
       newBf = BF.set oldBf ix True
@@ -446,7 +446,7 @@ handleInterested = do
     emit Unchoke
     updatePeerData $ peerData { amChoking = False, peerInterested = True }
 
-data RequestOperation = RequestChunk Word32 Word32 PWP
+data RequestOperation = RequestChunk PieceId ChunkId PWP
                       | Raise PeerError
 
 requestNextChunk :: F PeerMonad ()
@@ -478,11 +478,11 @@ requestNextChunk = do
 
           case PS.getNextPiece bfrequestable avData of
             Nothing -> return (Nothing, False)
-            Just ix -> do
+            Just ix@(PieceId pieceId) -> do
               case () of
-                _ | not (BF.get pbf ix) ->
-                  return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get pbf ix) ++ ", us:" ++ show (BF.get bf ix) ++ ", bfrequested:" ++ show (BF.get bfrequested ix)), False)
-                _ | BF.get bf ix ->
+                _ | not (BF.get pbf pieceId) ->
+                  return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get pbf pieceId) ++ ", us:" ++ show (BF.get bf pieceId) ++ ", bfrequested:" ++ show (BF.get bfrequested pieceId)), False)
+                _ | BF.get bf pieceId ->
                   return (Just $ Raise $ AssertionFailed "We already have it", False)
                 _ -> do
                   let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
@@ -490,11 +490,11 @@ requestNextChunk = do
                     Just (chunkField, chunkData) -> do
                       let nextChunk =  CF.getNextChunk chunkField
                       case nextChunk of
-                        Just (chunkField', cix) -> do
-                          let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
-                              request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
+                        Just (chunkField', cix@(ChunkId chunkId)) -> do
+                          let nextChunkSize = expectedChunkSize totalSize ix (ChunkId (chunkId+1)) pieceLen defaultChunkSize
+                              request = Request pieceId (chunkId * defaultChunkSize) nextChunkSize
                           modifyChunks (Map.insert ix (chunkField', chunkData))
-                          return (Just (RequestChunk ix (fromIntegral cix) request), True)
+                          return (Just (RequestChunk ix cix request), True)
                         _ -> return (Nothing, False)
                     Nothing -> do
                       let chunksCount = chunksInPieces pieceLen defaultChunkSize
@@ -520,8 +520,8 @@ handlePWP Unchoke = do
   updatePeerData $ peerData { peerChoking = False }
   requestNextChunk
 handlePWP (Bitfield field) = handleBitfield field
-handlePWP (Piece ix offset d) = receiveChunk ix offset d >> requestNextChunk
-handlePWP (Have ix) = handleHave ix
+handlePWP (Piece ix offset d) = receiveChunk (PieceId ix) offset d >> requestNextChunk
+handlePWP (Have ix) = handleHave (PieceId ix)
 handlePWP Interested = handleInterested
 handlePWP (Request ix offset len) = do
   peerData <- getPeerData
@@ -534,7 +534,7 @@ handlePWP (Request ix offset len) = do
 handlePWP _ = return () -- logging?
 
 -- | Marks the chunk as missing and deregistering the cleanup.
-releaseCleanup :: Word32 -> Word32 -> F PeerMonad ()
+releaseCleanup :: PieceId -> ChunkId -> F PeerMonad ()
 releaseCleanup pieceId chunkId = do
   cleanups <- getCleanups
 
@@ -543,7 +543,7 @@ releaseCleanup pieceId chunkId = do
       runMemory $ modifyChunks $ \chunks ->
         case Map.lookup pieceId chunks of
           Just (cf, d) ->
-            let cf' = CF.markMissing cf (fromIntegral chunkId)
+            let cf' = CF.markMissing cf chunkId
             in Map.insert pieceId (cf', d) chunks
           Nothing -> chunks
     Nothing -> pure ()

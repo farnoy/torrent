@@ -32,8 +32,8 @@ removeFromAvailability bf av = av // (f <$> [0..fromIntegral $ BF.length bf - 1]
 -- | Gets the next incomplete piece according to our algorithm.
 getNextPiece :: BitField -- ^ download progress
              -> AvailabilityData -- ^ availability
-             -> Maybe Word32
-getNextPiece bf av = fromIntegral . fst <$> g
+             -> Maybe PieceId
+getNextPiece bf av = PieceId . fromIntegral . fst <$> g
   where g = VU.ifoldl' (\counter index availability -> if BF.get bf (fromIntegral index)
             then counter
             else case counter of

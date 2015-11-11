@@ -47,18 +47,18 @@ newBitField len = BitField (B.replicate (fromIntegral byteLength) 0) len
 -- This is useful for figuring out which pieces are incomplete
 -- but have been requested, particularly with `intersection`.
 fromChunkFields :: Word32 -- ^ Length of the new BitField
-                -> [(Word32, ChunkField)] -- ^ Pairs of Piece ID and 'ChunkField'
+                -> [(PieceId, ChunkField)] -- ^ Pairs of Piece ID and 'ChunkField'
                 -> BitField
 fromChunkFields len chunksOriginal =
-  BitField (snd $ B.mapAccumL f (0, chunksOriginal) fresh) len
+  BitField (snd $ B.mapAccumL f (PieceId 0, chunksOriginal) fresh) len
   where byteLength = divideSize len 8
         fresh = B.replicate (fromIntegral byteLength) 0
-        f (ix, chunks) w =
+        f (PieceId ix, chunks) w =
           let (chunks', res) = foldl' (g ix) (chunks, w) [0..7]
-          in ((ix + 8, chunks'), res)
+          in ((PieceId (ix + 8), chunks'), res)
         {-# INLINABLE f #-}
         g ix (chunks, byte) n = case chunks of
-          (currentIx, cf):restChunks | currentIx == ix + n ->
+          (PieceId currentIx, cf):restChunks | currentIx == ix + n ->
             if CF.isRequested cf
               then (restChunks, byte `setBit` fromIntegral (7 - n))
               else (restChunks, byte)

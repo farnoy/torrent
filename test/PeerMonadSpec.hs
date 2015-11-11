@@ -73,7 +73,7 @@ evalMemoryMonadTest (ModifyChunks mut next) = do
 
 data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateOutputs :: [PWP]
-                           , peerStateCleanups :: Map.Map (Word32, Word32) UTCTime
+                           , peerStateCleanups :: Map.Map (PieceId, ChunkId) UTCTime
                            , peerStateEvents :: [PeerEvent]
                            , peerStateMemory :: Memory
                            , peerStateCurrentTime :: UTCTime
@@ -224,10 +224,10 @@ spec = do
       it "preserves cleanups for the handler" $ \(state, memory) -> do
           let events = []
               exp =
-                catchError (registerCleanup 0 0 *> getPeerEvent *> pure [])
+                catchError (registerCleanup (PieceId 0) (ChunkId 0) *> getPeerEvent *> pure [])
                            (const $ getCleanups >>= pure . Map.keys)
               res = fst <$> runPeerMonadTest state pData memory events exp refTime
-          res `shouldBe` Right [(0, 0)]
+          res `shouldBe` Right [(PieceId 0, ChunkId 0)]
 
       it "preserves peer data for the handler" $ \(state, memory) -> do
           let events = []

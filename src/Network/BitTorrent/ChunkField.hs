@@ -21,6 +21,7 @@ module Network.BitTorrent.ChunkField (
 
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IntSet
+import Network.BitTorrent.Utility
 
 -- | Stores status of chunks inside a single piece.
 data ChunkField = ChunkField
@@ -42,38 +43,41 @@ newChunkField n = ChunkField (IntSet.fromList [0..(n-1)])
 -- If there is a missing chunk, returns a new
 -- 'ChunkField' and its ID.
 getNextChunk :: ChunkField
-             -> Maybe (ChunkField, Int)
+             -> Maybe (ChunkField, ChunkId)
 getNextChunk cf@(ChunkField missing requested _) =
   case IntSet.lookupGE 0 missing of
     Just k -> Just (cf { missingChunks = IntSet.difference missing (IntSet.singleton k)
                        , requestedChunks = IntSet.insert k requested
                        }
-                   , k)
+                   , ChunkId (fromIntegral k))
     Nothing -> Nothing
 {-# INLINABLE getNextChunk #-}
 
 -- | Mark the chunk as completed.
-markCompleted :: ChunkField -> Int -> ChunkField
-markCompleted cf@(ChunkField missing requested completed) ix =
-  cf { requestedChunks = IntSet.difference requested (IntSet.singleton ix)
-     , missingChunks = IntSet.difference missing (IntSet.singleton ix)
-     , completedChunks = IntSet.insert ix completed }
+markCompleted :: ChunkField -> ChunkId -> ChunkField
+markCompleted cf@(ChunkField missing requested completed) (ChunkId ix) =
+  cf { requestedChunks = IntSet.difference requested (IntSet.singleton id)
+     , missingChunks = IntSet.difference missing (IntSet.singleton id)
+     , completedChunks = IntSet.insert id completed }
+  where id = fromIntegral ix
 {-# INLINABLE markCompleted #-}
 
 -- | Mark the chunk as requested.
-markRequested :: ChunkField -> Int -> ChunkField
-markRequested cf@(ChunkField missing requested completed) ix =
-  cf { missingChunks = IntSet.difference missing (IntSet.singleton ix)
-     , completedChunks = IntSet.difference completed (IntSet.singleton ix)
-     , requestedChunks = IntSet.insert ix requested }
+markRequested :: ChunkField -> ChunkId -> ChunkField
+markRequested cf@(ChunkField missing requested completed) (ChunkId ix) =
+  cf { missingChunks = IntSet.difference missing (IntSet.singleton id)
+     , completedChunks = IntSet.difference completed (IntSet.singleton id)
+     , requestedChunks = IntSet.insert id requested }
+  where id = fromIntegral ix
 {-# INLINABLE markRequested #-}
 
 -- | Mark the chunk as missing.
-markMissing :: ChunkField -> Int -> ChunkField
-markMissing cf@(ChunkField missing requested completed) ix =
-  cf { missingChunks = IntSet.insert ix missing
-     , requestedChunks = IntSet.difference requested (IntSet.singleton ix)
-     , completedChunks = IntSet.difference completed (IntSet.singleton ix) }
+markMissing :: ChunkField -> ChunkId -> ChunkField
+markMissing cf@(ChunkField missing requested completed) (ChunkId ix) =
+  cf { missingChunks = IntSet.insert id missing
+     , requestedChunks = IntSet.difference requested (IntSet.singleton id)
+     , completedChunks = IntSet.difference completed (IntSet.singleton id) }
+  where id = fromIntegral ix
 {-# INLINABLE markMissing #-}
 
 -- | /O(1)/ Check if the 'ChunkField' is completed.
