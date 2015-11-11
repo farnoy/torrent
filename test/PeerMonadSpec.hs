@@ -157,7 +157,7 @@ spec = do
   refTime <- runIO $ getCurrentTime
   let addr = testAddr [1, 0, 0, 127] 9999
       peerId = B.replicate (fromEnum '1') 20
-      bf = BF.BitField (B.replicate (1 + (quot pieceCount 8)) maxBound) pieceCount
+      bf = BF.BitField (B.replicate (quot pieceCount 8) maxBound) pieceCount
       pData = newPeer bf addr peerId
       withState :: ((ClientState, Memory) -> IO ()) -> IO ()
       withState f = do
