@@ -29,12 +29,13 @@ data PeerData = PeerData {
 , peerId :: ByteString
 , peerBitField :: BitField
 , requestsLive :: Word8
+, peerDataStopping :: Bool
 } deriving(Eq, Show)
 
 -- | Create a new 'PeerData' structure.
 newPeer :: BitField -> SockAddr -> ByteString -> PeerData
 newPeer bf addr peer =
-  PeerData True False True False addr peer bf 0
+  PeerData True False True False addr peer bf 0 False
 {-# INLINABLE newPeer #-}
 
 -- | Stores information about the client application.

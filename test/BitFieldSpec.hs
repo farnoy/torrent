@@ -63,3 +63,27 @@ spec = do
           field = setMultiple 100 values'
           correct = (\(ix, val) -> BF.get field ix == val) <$> values'
       in and correct
+
+  it "calculates bitfield intersection" $ property $ changeDepth (const 6) $ \bf1 bf2 ->
+    BF.length bf1 > 0 && BF.length bf1 == BF.length bf2 ==>
+      let intersected = BF.intersection bf1 bf2
+      in forAll $ \n -> n >= 0 && n < BF.length bf1 ==>
+        case BF.get intersected n of
+          True -> BF.get bf1 n && BF.get bf2 n
+          False -> (BF.get bf1 n == False) || (BF.get bf2 n == False)
+
+  it "calculates bitfield union" $ property $ changeDepth (const 6) $ \bf1 bf2 ->
+    BF.length bf1 > 0 && BF.length bf1 == BF.length bf2 ==>
+      let unioned = BF.union bf1 bf2
+      in forAll $ \n -> n >= 0 && n < BF.length bf1 ==>
+        case BF.get unioned n of
+          True -> BF.get bf1 n || BF.get bf2 n
+          False -> (BF.get bf1 n == False) && (BF.get bf2 n == False)
+
+  it "calculates bitfield difference" $ property $ changeDepth (const 6) $ \bf1 bf2 ->
+    BF.length bf1 > 0 && BF.length bf1 == BF.length bf2 ==>
+      let diffed = BF.difference bf1 bf2
+      in forAll $ \n -> n >= 0 && n < BF.length bf1 ==>
+        case BF.get diffed n of
+          True -> BF.get bf1 n && (BF.get bf2 n == False)
+          False -> (BF.get bf1 n == False) || BF.get bf2 n

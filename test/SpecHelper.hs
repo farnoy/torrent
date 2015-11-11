@@ -46,6 +46,11 @@ instance Monad m => Serial m PWP where
 instance Monad m => Serial m BHandshake where
   series = cons2 BHandshake
 
+instance Monad m => Serial m BF.BitField where
+  series = do
+    bs <- series
+    return $ BF.BitField bs (fromIntegral (B.length bs) * 8)
+
 testAddr bytes port = SockAddrInet port (decode $ BL.pack bytes :: Word32)
 
 testData = BL.toStrict $ BL.take (pieceSize * 48 - 80) $ BL.cycle "kopa to dopa"

@@ -10,6 +10,7 @@ import qualified Data.Attoparsec.ByteString.Lazy as AL
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
 import Network.BitTorrent.Bencoding
+import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.Types
@@ -63,3 +64,5 @@ periodicCheckup :: ClientState -> IO ()
 periodicCheckup state = forever $ do
   threadDelay 1000000
   writeChan (sharedMessages state) Checkup
+  chunks <- atomically (readTVar (pieceChunks state))
+  print (CF.requestedChunks . fst <$> chunks)

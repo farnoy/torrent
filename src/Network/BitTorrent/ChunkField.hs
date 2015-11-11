@@ -9,7 +9,7 @@
 --
 -- This is enough information to coordinate download of a piece.
 module Network.BitTorrent.ChunkField (
-  ChunkField
+  ChunkField(..)
 , newChunkField
 , getNextChunk
 , markCompleted
@@ -70,9 +70,10 @@ markRequested cf@(ChunkField missing requested completed) ix =
 
 -- | Mark the chunk as missing.
 markMissing :: ChunkField -> Int -> ChunkField
-markMissing cf@(ChunkField missing requested _) ix =
+markMissing cf@(ChunkField missing requested completed) ix =
   cf { missingChunks = IntSet.insert ix missing
-     , requestedChunks = IntSet.difference requested (IntSet.singleton ix) }
+     , requestedChunks = IntSet.difference requested (IntSet.singleton ix)
+     , completedChunks = IntSet.difference completed (IntSet.singleton ix) }
 {-# INLINABLE markMissing #-}
 
 -- | /O(1)/ Check if the 'ChunkField' is completed.

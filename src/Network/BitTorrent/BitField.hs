@@ -7,8 +7,12 @@ module Network.BitTorrent.BitField (
 , get
 , set
 , completed
-, intersection
 , toPWP
+-- * Useful operations
+, intersection
+, difference
+, union
+, Network.BitTorrent.BitField.negate
 ) where
 
 import Data.Bits
@@ -65,8 +69,24 @@ fromChunkFields len chunksOriginal =
 -- | /O(n)/ Returns the intersection of both bitfields.
 intersection :: BitField -> BitField -> BitField
 intersection (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
+  where f ix w = (ix + 1, w .&. B.index b ix)
+        {-# INLINABLE f #-}
+
+-- | /O(n)/ Returns the union of both bitfields.
+union :: BitField -> BitField -> BitField
+union (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
   where f ix w = (ix + 1, w .|. B.index b ix)
         {-# INLINABLE f #-}
+
+-- | /O(n)/ Returns the difference of bitfields. A \ B
+difference :: BitField -> BitField -> BitField
+difference (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
+  where f ix w = (ix + 1, w `xor` (w .&. B.index b ix))
+        {-# INLINABLE f #-}
+
+-- | /O(n)/ Returns the bitfield with all values negated.
+negate :: BitField -> BitField
+negate (BitField a len) = BitField (B.map complement a) len
 
 -- | /O(1)/ Get the status of a single piece.
 get :: BitField -> Word32 -> Bool

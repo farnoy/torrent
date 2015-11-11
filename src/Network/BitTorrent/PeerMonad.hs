@@ -21,7 +21,6 @@ module Network.BitTorrent.PeerMonad (
   PeerMonad()
 #endif
 , runPeerMonad
-, PeerEvent(..)
 , PeerError(..)
 , Cleanups
 
@@ -52,9 +51,9 @@ module Network.BitTorrent.PeerMonad (
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Monad
-import Control.Monad.Catch hiding(throwM, catch)
-import qualified Control.Monad.Catch as Catch
+import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
+import qualified Control.Monad.Except as Except
 import Control.Monad.Free.Church
 import Control.Monad.Reader
 import Control.Monad.STM
@@ -63,7 +62,9 @@ import Crypto.Hash.SHA1
 import qualified Data.Binary as Binary
 import qualified Data.Binary.Get as Binary.Get
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Base64 as B64
 import Data.ByteString.Internal as BI
 import Data.Foldable (traverse_)
 import Data.Map.Strict as Map
@@ -99,7 +100,9 @@ data PeerState = PeerState { peerStateData :: !PeerData
                            }
 
 -- | Encodes exceptions that can happen in a peer loop.
-data PeerError = ConnectionLost deriving(Eq,Show)
+data PeerError = ConnectionLost
+               | AssertionFailed String
+               deriving(Eq,Show)
 instance Exception PeerError
 
 -- TODO Logger
@@ -108,7 +111,10 @@ type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState IO))
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
 -- Retrieved by using 'getPeerEvent'.
-data PeerEvent = PWPEvent PWP | SharedEvent SharedMessage deriving(Eq,Show)
+data PeerEvent = PWPEvent PWP
+               | SharedEvent SharedMessage
+               | ErrorEvent PeerError
+               deriving(Eq,Show)
 
 -- | Encodes all possible operations on the PeerMonad.
 -- Higher level operations use these to implement the protocol logic.
@@ -250,20 +256,19 @@ runPeerMonad state pData outHandle t = do
   sharedChan <- dupChan (sharedMessages state)
 
   let peerState = PeerState pData privateChan outHandle Map.empty
-  mainThreadId <- myThreadId
 
-  promise1 <- async $ messageForwarder mainThreadId outHandle privateChan
+  promise1 <- async $ messageForwarder outHandle privateChan
   promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
   let action = evalStateT (runReaderT (runExceptT (inside t)) state) peerState
   action `finally` (cancel promise1 *> cancel promise2 *> hClose outHandle)
 
   where inside = iterM evalPeerMonadIO
-        messageForwarder mainThreadId handle privateChan = (do
+        messageForwarder handle privateChan = (do
           input <- BL.hGetContents handle
           let messages = messageStream input
           traverse_ (writeChan privateChan . PWPEvent) messages)
-          `onException` throwTo mainThreadId ConnectionLost
+          `onException` writeChan privateChan (ErrorEvent ConnectionLost)
         messageStream :: BL.ByteString -> [PWP]
         messageStream input =
           case Binary.Get.runGetOrFail Binary.get input of
@@ -276,15 +281,20 @@ evalPeerMonadIO (RunMemory a next) = do
   state <- ask
   res <- liftIO $ atomically $ runMemoryMonadSTM state a
   next res
-evalPeerMonadIO (GetPeerData next) = do
-  PeerState pData _ _ _ <- get
-  next pData
+evalPeerMonadIO (GetPeerData next) =
+  get >>= next . peerStateData
 evalPeerMonadIO (Emit pwp next) = do
   state <- get
   let handle = peerStateHandle state
-  liftIO $ Catch.catchIOError
-             (BL.hPut handle (Binary.encode pwp))
-             (const (Catch.throwM ConnectionLost))
+
+  res <- liftIO $ Catch.catchIOError
+             (BL.hPut handle (Binary.encode pwp) *> return True)
+             (const (return True))
+
+  case res of
+    True -> return ()
+    False -> Except.throwError ConnectionLost
+
   next
 evalPeerMonadIO (GetMeta next) = do
   meta <- metaInfo <$> ask
@@ -322,19 +332,16 @@ evalPeerMonadIO (DeregisterCleanup pieceId chunkId next) = do
   pState <- get
   let cleanups = peerStateCleanups pState
 
-  case Map.lookup (pieceId, chunkId) cleanups of
-    Just _ ->
-      put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
-    Nothing -> pure ()
+  put $ pState { peerStateCleanups = Map.delete (pieceId, chunkId) cleanups }
 
   next
 evalPeerMonadIO (GetCleanups next) = do
   pState <- get
   next (peerStateCleanups pState)
 evalPeerMonadIO (GetTime next) = liftIO getCurrentTime >>= next
-evalPeerMonadIO (Throw e next) = Catch.throwM e *> next
-evalPeerMonadIO (Catch action handler ) =
-  Catch.catch action handler
+evalPeerMonadIO (Throw e next) = Except.throwError e *> next
+evalPeerMonadIO (Catch action handler) =
+  Except.catchError action handler
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
@@ -366,35 +373,34 @@ receiveChunk ix offset d = do
 
 processPiece :: Word32 -> F PeerMonad ()
 processPiece ix = do
-  Just (chunkField, d) <- runMemory (Map.lookup ix <$> getChunks)
-  when (CF.isCompleted chunkField) $ do
-    meta <- getMeta
-    let infoDict = info meta
-        pieces' = pieces infoDict
-        defaultPieceLen = pieceLength $ info meta
-        getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
-        hashCheck = hash d == getPieceHash ix
+  meta <- getMeta
+  let infoDict = info meta
+      pieces' = pieces infoDict
+      defaultPieceLen = pieceLength $ info meta
+      getPieceHash n = B.take 20 $ B.drop (fromIntegral n * 20) pieces'
 
-    {-unless hashCheck $ do
-      print $ "Validating hashes " <> show hashCheck
-      print ix-}
+  dataToWrite <- runMemory $ do
+    Just (chunkField, d) <- Map.lookup ix <$> getChunks
+    let hashCheck = hash d == getPieceHash ix
 
-    wasSetAlready <- runMemory $ do
-      modifyChunks $ Map.delete ix
-      if hashCheck
-        then do
-          bf <- getBitfield
-          let wasSetAlready = BF.get bf ix
-          unless wasSetAlready $
-            modifyBitfield (\bf' -> BF.set bf' ix True)
-          return wasSetAlready
-        else return False
-      -- because we remove the entry from (pieceChunks state),
-      -- but not indicate it as downloaded in the bitField,
-      -- it will be reacquired again
+    case CF.isCompleted chunkField of
+      True -> do
+        modifyChunks $ Map.delete ix
+        if hashCheck
+          then do
+            bf <- getBitfield
+            if BF.get bf ix
+              then return Nothing
+              else modifyBitfield (\bf' -> BF.set bf' ix True) *> return (Just d)
+          else return Nothing
+               -- because we remove the entry from (pieceChunks state),
+               -- but not indicate it as downloaded in the bitField,
+               -- it will be reacquired again
+      False -> return Nothing
 
-    when (hashCheck && not wasSetAlready) $
-      writeData (defaultPieceLen * ix) d
+  case dataToWrite :: Maybe ByteString of
+    Just d -> writeData (defaultPieceLen * ix) d
+    Nothing -> return ()
 
 handleBitfield :: ByteString -> F PeerMonad ()
 handleBitfield field = do
@@ -424,71 +430,73 @@ handleInterested = do
     emit Unchoke
     updatePeerData $ peerData { amChoking = False, peerInterested = True }
 
+data RequestOperation = RequestChunk Word32 Word32 PWP
+                      | Raise PeerError
+
 requestNextChunk :: F PeerMonad ()
 requestNextChunk = do
   peerData <- getPeerData
-  when (requestsLive peerData < maxRequestsPerPeer) $
-    unless (peerChoking peerData) $ do
-      (chunks, bf, avData) <- runMemory $ do
-        chunks <- getChunks
-        avData <- getAvailability
-        bf <- getBitfield
-        return (chunks, bf, avData)
-      meta <- getMeta
-      let pbf = peerBitField peerData
-          infoDict = info meta
-          defaultPieceLen :: Word32
-          defaultPieceLen = pieceLength infoDict
-          totalSize = Meta.length infoDict
+  when (not $ peerDataStopping peerData) $
+    when (requestsLive peerData < maxRequestsPerPeer) $
+      unless (peerChoking peerData) $ do
+        meta <- getMeta
+        (operation, shouldRunAgain) <- runMemory $ do
+          chunks <- getChunks
+          avData <- getAvailability
+          bf <- getBitfield
 
-          -- lastStage = False -- BF.completed bf > 0.9 -- as long as the unsafe buffer copies happen
+          let pbf = peerBitField peerData
+              infoDict = info meta
+              defaultPieceLen :: Word32
+              defaultPieceLen = pieceLength infoDict
+              totalSize = Meta.length infoDict
+              bfrequested = BF.fromChunkFields
+                              (BF.length pbf)
+                              (Map.toList (fst <$> chunks))
+              bfdone = BF.union bf bfrequested
+              bfrequestable = BF.negate $ BF.difference pbf bfdone
+              -- logic for the bitfield operations is:
+              -- still_needed = peer's - (ours + fully_requested)
+              -- negation is only for getNextPiece, but that should be
+              -- changed in the future
 
-          bfrequestable = {- if lastStage
-                            then bf
-                            else -} BF.intersection bf (BF.fromChunkFields (BF.length pbf) (Map.toList (fst <$> chunks)))
+          case PS.getNextPiece bfrequestable avData of
+            Nothing -> return (Nothing, False)
+            Just ix -> do
+              case () of
+                _ | not (BF.get pbf ix) ->
+                  return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get pbf ix) ++ ", us:" ++ show (BF.get bf ix) ++ ", bfrequested:" ++ show (BF.get bfrequested ix)), False)
+                _ | BF.get bf ix ->
+                  return (Just $ Raise $ AssertionFailed "We already have it", False)
+                _ -> do
+                  let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
+                  case Map.lookup ix chunks of
+                    Just (chunkField, chunkData) -> do
+                      let nextChunk =  CF.getNextChunk chunkField
+                      case nextChunk of
+                        Just (chunkField', cix) -> do
+                          let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
+                              request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
+                          modifyChunks (Map.insert ix (chunkField', chunkData))
+                          return (Just (RequestChunk ix (fromIntegral cix) request), True)
+                        _ -> return (Nothing, False)
+                    Nothing -> do
+                      let chunksCount = chunksInPieces pieceLen defaultChunkSize
+                          chunkData = B.replicate (fromIntegral pieceLen) 0
+                          insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
+                      modifyChunks $ Map.insert ix insertion
+                      return (Nothing, True)
 
-          -- incompletePieces = PS.getIncompletePieces bfrequestable
+        case operation of
+          Just (RequestChunk pid cid request) -> do
+            registerCleanup pid cid
+            let modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
+            updatePeerData modifiedPeer
+            emit request
+          Just (Raise err) -> throwError err
+          Nothing -> return ()
 
-      nextPiece <- {- if lastStage
-                     then do
-                       if Prelude.length incompletePieces - 1 > 0
-                         then return $ unsafePerformIO $ do
-                           rand <- randomRIO (0, Prelude.length incompletePieces - 1)
-                           return $ Just $ incompletePieces !! rand
-                         else return Nothing
-                     else -} pure $ PS.getNextPiece bfrequestable avData
-
-      case nextPiece of
-        Nothing -> return () -- putStrLn "we have all dem pieces"
-        Just ix -> do
-          let pieceLen = expectedPieceSize totalSize ix defaultPieceLen
-          case Map.lookup ix chunks of
-            Just (chunkField, chunkData) -> do
-              -- let Just (cf, incomplete) = CF.getIncompleteChunks chunkField
-              let nextChunk = {- if lastStage
-                          then return $ unsafePerformIO $ do
-                            rand <- randomRIO (0, Prelude.length incomplete - 1)
-                            return $ Just (cf, incomplete !! rand)
-                          else -} CF.getNextChunk chunkField
-              case nextChunk of
-                Just (chunkField', cix) -> do
-                  let nextChunkSize = expectedChunkSize totalSize ix (fromIntegral cix+1) pieceLen defaultChunkSize
-                      request = Request ix (fromIntegral cix * defaultChunkSize) nextChunkSize
-                      modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
-                  runMemory $
-                    modifyChunks (Map.insert ix (chunkField', chunkData))
-                  registerCleanup ix (fromIntegral cix)
-                  updatePeerData modifiedPeer
-                  emit request
-                  requestNextChunk
-                _ -> processPiece ix >> requestNextChunk
-            Nothing -> do
-              let chunksCount = chunksInPieces pieceLen defaultChunkSize
-                  chunkData = B.replicate (fromIntegral pieceLen) 0
-                  insertion = (CF.newChunkField (fromIntegral chunksCount), chunkData)
-              runMemory $
-                modifyChunks $ Map.insert ix insertion
-              requestNextChunk
+        when shouldRunAgain requestNextChunk
 
 handlePWP :: PWP -> F PeerMonad ()
 handlePWP Unchoke = do
@@ -528,20 +536,27 @@ releaseCleanup pieceId chunkId = do
 
 -- | Runs the peer loop, processing all events.
 entryPoint :: F PeerMonad ()
-entryPoint = catchError processEvent cleanup
+entryPoint = catchError processEvent onError
   where processEvent = forever (getPeerEvent >>= handler)
         handler (PWPEvent pwp) = handlePWP pwp
+        handler (ErrorEvent err) = throwError err
         handler (SharedEvent RequestPiece) = requestNextChunk
         handler (SharedEvent Checkup) = do
           t <- getTime
           cleanups <- getCleanups
           let timedOut = Map.filter (\date -> diffUTCTime t date > 10) cleanups
               keys = fst <$> Map.toList timedOut
+              allKeys = fst <$> Map.toList cleanups
+          pData <- getPeerData
           traverse_ (uncurry releaseCleanup) keys
 
           when (Prelude.null keys) requestNextChunk
-        cleanup ConnectionLost = do
+        onError ConnectionLost = cleanup
+        onError (AssertionFailed what) = cleanup
+        cleanup = do
           cleanups <- getCleanups
+          pData <- getPeerData
+          updatePeerData $ pData { peerDataStopping = True }
           let keys = fst <$> Map.toList cleanups
           traverse_ (uncurry releaseCleanup) keys
 
