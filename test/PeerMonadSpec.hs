@@ -148,6 +148,7 @@ evalPeerMonadTest (GetTime next) = do
   let t = peerStateCurrentTime pState
   put $ pState { peerStateCurrentTime = addUTCTime 1 t }
   next t
+evalPeerMonadTest (Log exp next) = next
 
 spec :: SpecWith ()
 spec = do
