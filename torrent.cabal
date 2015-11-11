@@ -45,10 +45,12 @@ library
                  , http-types
                  , ieee754
                  , lens-family
+                 , monad-logger
                  , mtl
                  , network
                  , random
                  , stm
+                 , text
                  , time
                  , uuid
                  , vector
@@ -111,11 +113,13 @@ test-suite torrent-test
                      , http-client
                      , ieee754
                      , lens-family
+                     , monad-logger
                      , mtl
                      , network
                      , random
                      , smallcheck
                      , stm
+                     , text
                      , time
                      , unordered-containers
                      , uuid

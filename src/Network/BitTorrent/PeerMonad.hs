@@ -55,6 +55,7 @@ import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Control.Monad.Except as Except
 import Control.Monad.Free.Church
+import Control.Monad.Logger
 import Control.Monad.Reader
 import Control.Monad.STM
 import Control.Monad.State.Strict
@@ -63,11 +64,14 @@ import qualified Data.Binary as Binary
 import qualified Data.Binary.Get as Binary.Get
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import Data.ByteString.Conversion
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as B64
 import Data.ByteString.Internal as BI
 import Data.Foldable (traverse_)
 import Data.Map.Strict as Map
+import Data.Monoid
+import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Word
 import Data.Vector.Storable.Mutable as VS
@@ -80,6 +84,7 @@ import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
+import Prelude hiding (log)
 import System.IO
 import System.IO.Unsafe
 
@@ -106,7 +111,7 @@ data PeerError = ConnectionLost
 instance Exception PeerError
 
 -- TODO Logger
-type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState IO))
+type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState (LoggingT IO)))
 
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
@@ -132,6 +137,7 @@ data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetTime (UTCTime -> a)
                 | Throw PeerError a
                 | Catch a (PeerError -> a)
+                | Log (LoggingT IO ()) a
 
 instance Functor PeerMonad where
   fmap f (RunMemory action next) = RunMemory action (fmap f next)
@@ -148,6 +154,7 @@ instance Functor PeerMonad where
   fmap f (GetTime next) = GetTime (fmap f next)
   fmap f (Throw err next) = Throw err (f next)
   fmap f (Catch action handler) = Catch (f action) (fmap f handler)
+  fmap f (Log what next) = Log what (f next)
 
 -- | Run a MemoryMonad expression as a single, atomic transaction.
 runMemory :: F MemoryMonad a -> F PeerMonad a
@@ -240,6 +247,14 @@ catchError :: F PeerMonad a -> (PeerError -> F PeerMonad a) -> F PeerMonad a
 catchError action handler = join $ liftF $ Catch action handler
 {-# INLINABLE catchError #-}
 
+-- | Logs messages that are of 'MonadLogger' form.
+log :: (T.Text -> LoggingT IO ()) -> F PeerMonad ()
+log exp = do
+  pData <- getPeerData
+  case fromByteString (B64.encode (peerId pData)) of
+    Just t -> liftF $ Log (exp t) ()
+    Nothing -> return ()
+
 -- | Runs a 'PeerMonad' in the IO monad.
 --
 -- Internally spawns threads to process events from multiple sources efficiently.
@@ -260,7 +275,7 @@ runPeerMonad state pData outHandle t = do
   promise1 <- async $ messageForwarder outHandle privateChan
   promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
-  let action = evalStateT (runReaderT (runExceptT (inside t)) state) peerState
+  let action = runStderrLoggingT (evalStateT (runReaderT (runExceptT (inside t)) state) peerState)
   action `finally` (cancel promise1 *> cancel promise2 *> hClose outHandle)
 
   where inside = iterM evalPeerMonadIO
@@ -342,6 +357,7 @@ evalPeerMonadIO (GetTime next) = liftIO getCurrentTime >>= next
 evalPeerMonadIO (Throw e next) = Except.throwError e *> next
 evalPeerMonadIO (Catch action handler) =
   Except.catchError action handler
+evalPeerMonadIO (Log exp next) = lift (lift (lift exp)) *> next
 
 receiveChunk :: Word32 -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk ix offset d = do
@@ -548,15 +564,24 @@ entryPoint = catchError processEvent onError
               keys = fst <$> Map.toList timedOut
               allKeys = fst <$> Map.toList cleanups
           pData <- getPeerData
+          log $ \peerid -> logDebugN $ "checkup for " <> peerid <> " " <> T.pack (show allKeys) <> " actually releasing " <> T.pack (show keys)
           traverse_ (uncurry releaseCleanup) keys
 
           when (Prelude.null keys) requestNextChunk
-        onError ConnectionLost = cleanup
-        onError (AssertionFailed what) = cleanup
+        onError ConnectionLost = do
+          pData <- getPeerData
+          log $ \peerid -> logDebugN $ "ConnectionLost to " <> peerid
+          cleanup
+        onError (AssertionFailed what) = do
+          pData <- getPeerData
+          log $ \peerid -> logDebugN $ "AssertionFailed for " <> peerid <> " with " <> T.pack what
+          cleanup
         cleanup = do
           cleanups <- getCleanups
           pData <- getPeerData
           updatePeerData $ pData { peerDataStopping = True }
           let keys = fst <$> Map.toList cleanups
+          log $ const $ logDebugN "kek"
+          log $ \peerid -> logDebugN $ "exiting from " <> peerid <> " and releasing " <> T.pack (show keys)
           traverse_ (uncurry releaseCleanup) keys
 
