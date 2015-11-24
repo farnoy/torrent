@@ -113,7 +113,7 @@ set (BitField field len) ix val = (BitField $! updatedField) $! len
 -- | /O(n)/ Get the ratio of completed pieces.
 completed :: BitField
           -> Float -- ^ Result in range /[0;1]/
-completed (BitField b len) = fromIntegral (Foldable.sum (B.unpack b)) / fromIntegral len
+completed (BitField b len) = fromIntegral (Foldable.sum (popCount <$> B.unpack b)) / fromIntegral len
 {-# INLINABLE completed #-}
 
 -- | /O(1)/ Cast the BitField to a PWP message.

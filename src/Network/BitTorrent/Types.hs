@@ -7,7 +7,7 @@ module Network.BitTorrent.Types (
 , SharedMessage(..)
 , Chunks
 , defaultChunkSize
-, chunksInPieces
+, chunksInPiece
 , expectedPieceSize
 , expectedChunkSize
 , PieceId(..)
@@ -81,18 +81,18 @@ defaultChunkSize :: Word32
 defaultChunkSize = 2 ^ (14 :: Word32)
 
 -- | Calculates the number of chunks in a piece.
-chunksInPieces :: Word32 -- ^ piece size
+chunksInPiece :: Word32 -- ^ piece size
                -> Word32 -- ^ chunk size
                -> Word32
-chunksInPieces = divideSize
-{-# INLINABLE chunksInPieces #-}
+chunksInPiece = divideSize
+{-# INLINABLE chunksInPiece #-}
 
 -- | Calculates the piece size.
 expectedPieceSize :: Word32 -- ^ total size of all pieces
-                  -> PieceId
                   -> Word32 -- ^ piece size
+                  -> PieceId
                   -> Word32
-expectedPieceSize totalSize (PieceId pix) pSize =
+expectedPieceSize totalSize pSize (PieceId pix) =
   if pix >= pCount
     then if totalSize `rem` pSize == 0
          then pSize
@@ -102,18 +102,18 @@ expectedPieceSize totalSize (PieceId pix) pSize =
 {-# INLINABLE expectedPieceSize #-}
 
 -- | Calculates the chunk size.
-expectedChunkSize :: Word32 -- ^ total size of all pieces
+expectedChunkSize :: Word32  -- ^ total size of all pieces
+                  -> Word32  -- ^ piece size
+                  -> Word32  -- ^ default chunk size
                   -> PieceId -- ^ piece index
                   -> ChunkId -- ^ chunk index
-                  -> Word32 -- ^ piece size
-                  -> Word32 -- ^ default chunk size
                   -> Word32
-expectedChunkSize totalSize (PieceId pix) (ChunkId cix) pSize cSize =
-  if cix >= chunksInPiece
+expectedChunkSize totalSize pSize cSize piece (ChunkId cix) =
+  if cix >= chunksCount
     then if expectedPSize `rem` cSize == 0
          then cSize
          else expectedPSize `rem` cSize
     else cSize
-  where expectedPSize = expectedPieceSize totalSize (PieceId pix) pSize
-        chunksInPiece = chunksInPieces expectedPSize cSize
+  where expectedPSize = expectedPieceSize totalSize pSize piece
+        chunksCount = chunksInPiece expectedPSize cSize
 {-# INLINABLE expectedChunkSize #-}

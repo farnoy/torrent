@@ -73,7 +73,7 @@ evalMemoryMonadTest (ModifyChunks mut next) = do
 
 data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateOutputs :: [PWP]
-                           , peerStateCleanups :: Map.Map (PieceId, ChunkId) UTCTime
+                           , peerStateActiveChunks :: Map.Map (PieceId, ChunkId) UTCTime
                            , peerStateEvents :: [PeerEvent]
                            , peerStateMemory :: Memory
                            , peerStateCurrentTime :: UTCTime
@@ -130,14 +130,14 @@ evalPeerMonadTest (RunMemory action next) = do
   let (res, mem') = runMemoryMonadTest (peerStateMemory pState) action
   put $ pState { peerStateMemory = mem' }
   next res
-evalPeerMonadTest (GetCleanups next) = do
+evalPeerMonadTest (GetActiveChunks next) = do
   pState <- get
-  next $ peerStateCleanups pState
-evalPeerMonadTest (RegisterCleanup pid cid next) = do
+  next $ peerStateActiveChunks pState
+evalPeerMonadTest (RegisterActiveChunk pid cid next) = do
   pState <- get
   let t = peerStateCurrentTime pState
   put $ pState { peerStateCurrentTime = addUTCTime 1 t
-               , peerStateCleanups = Map.insert (pid, cid) t (peerStateCleanups pState)
+               , peerStateActiveChunks = Map.insert (pid, cid) t (peerStateActiveChunks pState)
                }
   next
 evalPeerMonadTest (Throw e next) = Catch.throwM e *> next
@@ -224,8 +224,8 @@ spec = do
       it "preserves cleanups for the handler" $ \(state, memory) -> do
           let events = []
               exp =
-                catchError (registerCleanup (PieceId 0) (ChunkId 0) *> getPeerEvent *> pure [])
-                           (const $ getCleanups >>= pure . Map.keys)
+                catchError (registerActiveChunk (PieceId 0) (ChunkId 0) *> getPeerEvent *> pure [])
+                           (const $ getActiveChunks >>= pure . Map.keys)
               res = fst <$> runPeerMonadTest state pData memory events exp refTime
           res `shouldBe` Right [(PieceId 0, ChunkId 0)]
 
