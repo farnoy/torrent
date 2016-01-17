@@ -183,7 +183,7 @@ readData o l = liftF $ ReadData o l id
 {-# INLINABLE readData #-}
 
 -- | Write data to disk.
-writeData :: Word32 -- ^ offset
+writeData :: Word32     -- ^ offset
           -> ByteString -- ^ data
           -> F PeerMonad ()
 writeData o b = liftF $ WriteData o b ()
