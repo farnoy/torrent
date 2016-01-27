@@ -109,7 +109,7 @@ expectedChunkSize :: Word32  -- ^ total size of all pieces
                   -> ChunkId -- ^ chunk index
                   -> Word32
 expectedChunkSize totalSize pSize cSize piece (ChunkId cix) =
-  if cix >= chunksCount
+  if (cix + 1) >= chunksCount
     then if expectedPSize `rem` cSize == 0
          then cSize
          else expectedPSize `rem` cSize
