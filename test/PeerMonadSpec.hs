@@ -5,7 +5,7 @@ import Control.Concurrent.Chan
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TVar
-import Control.Exception.Base
+import Control.Exception.Base as Exception
 import qualified Control.Monad.Catch as Catch
 import Control.Monad.Catch.Pure
 import Control.Monad.Except (ExceptT, runExceptT)
@@ -161,14 +161,12 @@ spec = do
       pData = newPeer bf addr peerId
       withState :: ((ClientState, Memory) -> IO ()) -> IO ()
       withState f = do
-        n <- randomIO :: IO Int
-        let testMeta' = testMeta
-              { info = (info testMeta)
-                { name = "test" <> BC.pack (show n) }
-              }
-        state <- newClientState tmpdir testMeta' 9999
+        n <- randomIO :: IO Word16
+        let dirName = tmpdir <> "/" <> show n
+        createDirectory dirName
+        state <- newClientState dirName testMeta 9999
         memory <- clientStateToMemory state
-        f (state, memory)
+        Exception.finally (f (state, memory)) (removeDirectoryRecursive dirName)
 
   describe "PeerMonad" $ around withState $ do
     describe "handlePWP" $ do

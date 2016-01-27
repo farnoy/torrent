@@ -25,6 +25,8 @@ import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 import Data.UUID hiding (fromByteString)
 import Data.UUID.V4
 import qualified Data.Vector.Unboxed as VU
@@ -57,11 +59,18 @@ newClientState dir meta listenPort = do
   let numPieces :: Integral a => a
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
   bit_field <- newTVarIO $ BF.newBitField numPieces
-  outHandle <- openFile (dir </> BC.unpack (name (info meta))) ReadWriteMode
+  handles <- openHandles dir meta
   avData <- newTVarIO $ VU.replicate numPieces 0
   mvar <- newMVar ()
   sharedMessages <- newChan
-  return $ ClientState peer meta bit_field chunks outHandle mvar listenPort avData sharedMessages
+  return $ ClientState peer meta bit_field chunks handles mvar listenPort avData sharedMessages
+
+openHandles :: FilePath -> MetaInfo -> IO (Seq (Word32, Word32, Handle))
+openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
+  where opener :: (Word32, [(Word32, Word32, Handle)]) -> FileInfo -> IO (Word32, [(Word32, Word32, Handle)])
+        opener (offset, list) (FileInfo l n) = do
+          hdl <- openFile (dir </> BC.unpack n) ReadWriteMode
+          return (offset + l, (offset, offset + l, hdl) : list)
 
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops
@@ -148,7 +157,7 @@ queryTracker state = do
                            , ("port", Just (BC.pack $ show globalPort))
                            , ("uploaded", Just "0")
                            , ("downloaded", Just "0")
-                           , ("left", Just (BC.pack $ show $ Meta.length $ info meta))
+                           , ("left", Just (BC.pack $ show $ sum (Meta.length <$> Meta.files (info meta))))
                            ] (fromJust url)
 
   manager <- newManager defaultManagerSettings

@@ -172,7 +172,7 @@ spec = do
           atomically $
             writeTVar (bitField state) fullBitField
 
-          let state' = state { outputHandle = handle }
+          let state' = state { outputHandles = (\(lo, hi, _) -> (lo, hi, handle)) <$> outputHandles state }
               addr = testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state'
           void $ btListen state'
 

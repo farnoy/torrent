@@ -15,6 +15,7 @@ import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.Types
 import System.Environment
+import System.IO
 import System.Posix.Signals
 
 openTorrentFile :: String -> IO (Maybe MetaInfo)
@@ -36,10 +37,15 @@ main = do
       void $ forkIO $ progressLogger clientState
       void $ forkIO $ sharedMessagesLogger clientState
       void $ forkIO $ periodicCheckup clientState
-      void $ installHandler sigINT (CatchOnce (traverse_ cancel promises)) Nothing
+      void $ installHandler sigINT (CatchOnce (cleanup clientState promises)) Nothing
       waitOnPeers promises
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
+
+cleanup :: ClientState -> [Async a] -> IO ()
+cleanup state promises = do
+  traverse_ cancel promises
+  traverse_ (\(_, _, handle) -> hClose handle) (outputHandles state)
 
 waitOnPeers :: [Async a] -> IO ()
 waitOnPeers promises = do

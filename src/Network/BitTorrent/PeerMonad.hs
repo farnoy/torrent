@@ -315,15 +315,15 @@ evalPeerMonadIO (GetMeta next) = do
   next meta
 evalPeerMonadIO (ReadData o l next) = do
   state <- ask
-  let hdl = outputHandle state
+  let hdls = outputHandles state
       lock = outputLock state
-  a <- liftIO $ FW.read hdl lock o l
+  a <- liftIO $ FW.read hdls lock o l
   next a
 evalPeerMonadIO (WriteData o d next) = do
   state <- ask
-  let hdl = outputHandle state
+  let hdls = outputHandles state
       lock = outputLock state
-  liftIO $ FW.write hdl lock o d
+  liftIO $ FW.write hdls lock o d
   next
 evalPeerMonadIO (UpdatePeerData pData next) = do
   pState <- get
@@ -475,7 +475,7 @@ nextRequestOperation peerData meta = do
   let peersBitField = peerBitField peerData
       infoDict = info meta
       defaultPieceLen = pieceLength infoDict
-      totalSize = Meta.length infoDict
+      totalSize = sum (Meta.length <$> Meta.files infoDict)
 
       requestedBitField = BF.fromChunkFields (BF.length peersBitField)
                                              (Map.toList (fst <$> chunks))

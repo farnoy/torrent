@@ -88,6 +88,7 @@ test-suite torrent-test
                , ChunkFieldSpec
                , ClientSpec
                , Discover
+               , FileWriterSpec
                , MetaInfoSpec
                , PWPSpec
                , PeerMonadSpec

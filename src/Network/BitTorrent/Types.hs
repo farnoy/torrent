@@ -19,6 +19,8 @@ import Control.Concurrent.STM.TVar
 import Data.Binary
 import Data.ByteString.Internal as BI
 import Data.Map.Strict (Map)
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 -- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
@@ -52,7 +54,7 @@ data ClientState = ClientState {
 , metaInfo :: MetaInfo
 , bitField :: TVar BitField
 , pieceChunks :: TVar Chunks
-, outputHandle :: Handle
+, outputHandles :: Seq (Word32, Word32, Handle)
 , outputLock :: MVar ()
 , ourPort :: Word16
 , availabilityData :: TVar PS.AvailabilityData
