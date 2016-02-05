@@ -117,6 +117,8 @@ test-suite torrent-test
                      , monad-logger
                      , mtl
                      , network
+                     , quickcheck-instances
+                     , QuickCheck
                      , random
                      , smallcheck
                      , stm
