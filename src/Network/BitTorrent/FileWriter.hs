@@ -5,7 +5,6 @@ module Network.BitTorrent.FileWriter (
 , write) where
 
 import Control.Concurrent
-import Control.Monad (when)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Foldable (fold, traverse_)

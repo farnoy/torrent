@@ -20,7 +20,6 @@ import Data.Binary
 import Data.ByteString.Internal as BI
 import Data.Map.Strict (Map)
 import Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 -- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF

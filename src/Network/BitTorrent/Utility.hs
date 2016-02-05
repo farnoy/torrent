@@ -32,12 +32,12 @@ fileOverlap :: Seq (Word32, Word32, Word32, a) -- ^ Left-inclusive ranges to loo
             -> Word32                  -- ^ upper bound to lookup
             -> Seq (Word32, Word32, Word32, a)
 fileOverlap ranges lo hi = rightAdjusted
-  where leftDropped = dropWhileL (\(_, l, h, _) -> h <= lo) ranges
+  where leftDropped = dropWhileL (\(_, _, h, _) -> h <= lo) ranges
         leftAdjusted = case viewl leftDropped of
           (base, leftLo, leftHi, leftC) :< leftDropped -> (base, max leftLo lo, leftHi, leftC) <| leftDropped
           _ -> leftDropped
 
-        rightDropped = takeWhileL (\(_, l, h, _) -> hi >= l) leftAdjusted
+        rightDropped = takeWhileL (\(_, l, _, _) -> hi >= l) leftAdjusted
         rightAdjusted = case viewr rightDropped of
           rightDropped :> (base, rightLo, rightHi, rightC) -> rightDropped |> (base, rightLo, min rightHi hi, rightC)
           EmptyR -> rightDropped
