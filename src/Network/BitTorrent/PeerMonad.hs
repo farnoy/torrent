@@ -524,8 +524,12 @@ nextRequestOperationLinear peerData meta = do
       totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
       findPiece n | n == (BF.length ourBitField) = Nothing
       findPiece n = case BF.get ourBitField n of
-        True -> Just (PieceId n)
-        False -> findPiece (n + 1)
+        False -> case Map.lookup (PieceId n) chunks of
+          Nothing -> Just (PieceId n)
+          Just (chunkField, _) -> case CF.getNextChunk chunkField of
+            Just _ -> Just (PieceId n)
+            _ -> findPiece (n + 1)
+        True -> findPiece (n + 1)
       nextPiece = findPiece 0
 
   case nextPiece of
