@@ -132,10 +132,10 @@ test-suite torrent-test
   cpp-options: -DTESTING
   default-language:    Haskell2010
 
-Benchmark benchmarks
+Benchmark piece-selection
     type:       exitcode-stdio-1.0
     hs-source-dirs: src benchmark
-    main-is:    Main.hs
+    main-is:    PieceSelection.hs
     build-depends: base
                  , async
                  , attoparsec
@@ -161,6 +161,7 @@ Benchmark benchmarks
                  , time
                  , uuid
                  , vector
+    ghc-options: -O -Wall -fno-warn-name-shadowing
     cpp-options: -DTESTING
 
 source-repository head

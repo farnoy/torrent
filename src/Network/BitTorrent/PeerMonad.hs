@@ -29,6 +29,7 @@ module Network.BitTorrent.PeerMonad (
 #ifdef TESTING
 , requestNextChunk
 , nextRequestOperation
+, nextRequestOperationLinear
 , receiveChunk
 , RequestOperation(..)
 #endif
@@ -508,6 +509,40 @@ nextRequestOperation peerData meta = do
                   chunkInfo = (chunkField, chunkData)
               claimChunk totalSize pieceLen chunkInfo piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
+
+#ifdef TESTING
+nextRequestOperationLinear :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
+nextRequestOperationLinear peerData meta = do
+  chunks <- getChunks
+  ourBitField <- getBitfield
+
+  let peersBitField = peerBitField peerData
+      infoDict = info meta
+      defaultPieceLen = pieceLength infoDict
+      totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
+      findPiece n | n == (BF.length ourBitField) = Nothing
+      findPiece n = case BF.get ourBitField n of
+        True -> Just (PieceId n)
+        False -> findPiece (n + 1)
+      nextPiece = findPiece 0
+
+  case nextPiece of
+    Nothing -> return Nothing
+    Just piece@(PieceId pieceId) ->
+      let pieceLen = expectedPieceSize totalSize defaultPieceLen piece
+      in case () of
+        _ | not (BF.get peersBitField pieceId) ->
+          return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get peersBitField pieceId) ++ ", us:" ++ show (BF.get ourBitField pieceId)))
+        _ ->
+          case Map.lookup piece chunks of
+            Nothing -> do
+              let chunksCount = chunksInPiece pieceLen defaultChunkSize
+                  chunkData = B.replicate (fromIntegral pieceLen) 0
+                  chunkField = CF.newChunkField (fromIntegral chunksCount)
+                  chunkInfo = (chunkField, chunkData)
+              claimChunk totalSize pieceLen chunkInfo piece
+            Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
+#endif
 
 requestNextChunk :: F PeerMonad ()
 requestNextChunk = do
