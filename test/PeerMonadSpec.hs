@@ -15,6 +15,7 @@ import Control.Monad.State.Strict
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Functor.Identity
+import Data.IntSet (IntSet)
 import qualified Data.Map.Strict as Map
 import Data.Monoid
 import Data.Time.Clock
@@ -39,13 +40,15 @@ import SpecHelper
 data Memory = Memory { memoryBitField :: BF.BitField
                      , memoryPieceChunks :: Chunks
                      , memoryAvailabilityData :: PS.AvailabilityData
+                     , memoryRequestablePieces :: IntSet
                      }
 
 clientStateToMemory :: ClientState -> IO Memory
 clientStateToMemory state = atomically (Memory
                                            <$> readTVar (bitField state)
                                            <*> readTVar (pieceChunks state)
-                                           <*> readTVar (availabilityData state))
+                                           <*> readTVar (availabilityData state)
+                                           <*> readTVar (requestablePieces state))
 
 type MemoryMonadTest = StateT Memory Identity
 
@@ -69,6 +72,13 @@ evalMemoryMonadTest (GetChunks next) = do
 evalMemoryMonadTest (ModifyChunks mut next) = do
   memory <- get
   put $ memory { memoryPieceChunks =  mut $ memoryPieceChunks memory }
+  next
+evalMemoryMonadTest (ReadRequestablePieces next) = do
+  memory <- get
+  next $ memoryRequestablePieces memory
+evalMemoryMonadTest (ModifyRequestablePieces mut next) = do
+  memory <- get
+  put $ memory { memoryRequestablePieces =  mut $ memoryRequestablePieces memory }
   next
 
 data PeerState = PeerState { peerStateData :: PeerData

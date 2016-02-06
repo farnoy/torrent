@@ -18,6 +18,7 @@ import Control.Concurrent
 import Control.Concurrent.STM.TVar
 import Data.Binary
 import Data.ByteString.Internal as BI
+import Data.IntSet (IntSet)
 import Data.Map.Strict (Map)
 import Data.Sequence (Seq)
 -- import Hexdump
@@ -52,6 +53,7 @@ data ClientState = ClientState {
   myPeerId :: ByteString
 , metaInfo :: MetaInfo
 , bitField :: TVar BitField
+, requestablePieces :: TVar IntSet
 , pieceChunks :: TVar Chunks
 , outputHandles :: Seq (Word32, Word32, Handle)
 , outputLock :: MVar ()

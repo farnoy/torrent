@@ -106,6 +106,7 @@ test-suite torrent-test
                      , bytestring-conversion
                      , containers
                      , cryptohash
+                     , deepseq
                      , directory
                      , exceptions
                      , filepath

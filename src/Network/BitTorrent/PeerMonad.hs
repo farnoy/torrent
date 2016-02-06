@@ -30,6 +30,7 @@ module Network.BitTorrent.PeerMonad (
 , requestNextChunk
 , nextRequestOperation
 , nextRequestOperationLinear
+, nextRequestOperationLinearV2
 , receiveChunk
 , RequestOperation(..)
 #endif
@@ -73,6 +74,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as B64
 import Data.ByteString.Internal as BI
 import Data.Foldable (traverse_)
+import qualified Data.IntSet as IntSet
 import Data.Map.Strict as Map
 import Data.Monoid
 import qualified Data.Text as T
@@ -412,6 +414,7 @@ processPiece piece@(PieceId pieceId) = do
             modifyBitfield (const newBitfield)
             modifyAvailability (PS.addToAvailability newBitfield .
                                 PS.removeFromAvailability bitfield)
+            modifyRequestablePieces (`IntSet.difference` IntSet.singleton (fromIntegral pieceId))
             return (Just d)
           else return Nothing -- we remove it from Chunks
                               -- but do not modify the bitfield,
@@ -510,7 +513,6 @@ nextRequestOperation peerData meta = do
               claimChunk totalSize pieceLen chunkInfo piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
 
-#ifdef TESTING
 nextRequestOperationLinear :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
 nextRequestOperationLinear peerData meta = do
   chunks <- getChunks
@@ -542,7 +544,47 @@ nextRequestOperationLinear peerData meta = do
                   chunkInfo = (chunkField, chunkData)
               claimChunk totalSize pieceLen chunkInfo piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
-#endif
+
+nextRequestOperationLinearV2 :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
+nextRequestOperationLinearV2 peerData meta = do
+  chunks <- getChunks
+  ourBitField <- getBitfield
+  requestablePieces <- getRequestablePieces
+
+  let peersBitField = peerBitField peerData
+      infoDict = info meta
+      defaultPieceLen = pieceLength infoDict
+      totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
+      findPiece n | n == (BF.length ourBitField) = Nothing
+      findPiece n = case IntSet.lookupGE (fromIntegral n) requestablePieces of
+        Just k ->
+          let piece = PieceId (fromIntegral k)
+              next = findPiece (fromIntegral k + 1)
+          in case Map.lookup piece chunks of
+            Nothing -> Just piece
+            Just (chunkField, _) -> case CF.getNextChunk chunkField of
+              Just _ -> Just piece
+              _ -> next
+            _ -> next
+        _ -> Nothing
+      nextPiece = findPiece 0
+
+  case nextPiece of
+    Nothing -> return Nothing
+    Just piece@(PieceId pieceId) ->
+      let pieceLen = expectedPieceSize totalSize defaultPieceLen piece
+      in case () of
+        _ | not (BF.get peersBitField pieceId) ->
+          return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get peersBitField pieceId) ++ ", us:" ++ show (BF.get ourBitField pieceId)))
+        _ ->
+          case Map.lookup piece chunks of
+            Nothing -> do
+              let chunksCount = chunksInPiece pieceLen defaultChunkSize
+                  chunkData = B.replicate (fromIntegral pieceLen) 0
+                  chunkField = CF.newChunkField (fromIntegral chunksCount)
+                  chunkInfo = (chunkField, chunkData)
+              claimChunk totalSize pieceLen chunkInfo piece
+            Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
 
 requestNextChunk :: F PeerMonad ()
 requestNextChunk = do
@@ -551,7 +593,7 @@ requestNextChunk = do
   unless (peerDataStopping peerData) $
     when (requestsLive peerData < maxRequestsPerPeer) $
     unless (peerChoking peerData) $ do
-      operation <- runMemory $ nextRequestOperation peerData meta
+      operation <- runMemory $ nextRequestOperationLinearV2 peerData meta
 
       case operation of
         Just (RequestChunk pieceId chunkId pwpRequest) -> do

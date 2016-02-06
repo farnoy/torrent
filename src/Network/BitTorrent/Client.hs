@@ -23,6 +23,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
+import qualified Data.IntSet as IntSet
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Sequence (Seq)
@@ -58,12 +59,13 @@ newClientState dir meta listenPort = do
   let peer = hash $ toASCIIBytes uuid
   let numPieces :: Integral a => a
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
+  requestable_pieces <- newTVarIO $ IntSet.fromList [0..(numPieces-1)]
   bit_field <- newTVarIO $ BF.newBitField numPieces
   handles <- openHandles dir meta
   avData <- newTVarIO $ VU.replicate numPieces 0
   mvar <- newMVar ()
   sharedMessages <- newChan
-  return $ ClientState peer meta bit_field chunks handles mvar listenPort avData sharedMessages
+  return $ ClientState peer meta bit_field requestable_pieces chunks handles mvar listenPort avData sharedMessages
 
 openHandles :: FilePath -> MetaInfo -> IO (Seq (Word32, Word32, Handle))
 openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd

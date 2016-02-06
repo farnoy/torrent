@@ -1,4 +1,6 @@
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 -- | Parses MetaInfo into a convenient structure.
 module Network.BitTorrent.MetaInfo (
   MetaInfo(..)
@@ -7,12 +9,14 @@ module Network.BitTorrent.MetaInfo (
 , parseMetaInfo
 ) where
 
-import Crypto.Hash.SHA1
 import Control.Applicative
+import Control.DeepSeq
+import Crypto.Hash.SHA1
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Maybe
 import Data.Word
+import GHC.Generics (Generic)
 import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
@@ -20,7 +24,7 @@ import Network.BitTorrent.Bencoding.Lenses
 data FileInfo = FileInfo {
   length :: Word32
 , name   :: ByteString
-} deriving(Eq, Show)
+} deriving(Eq, Show, Generic, NFData)
 
 -- | Holds the info dictionary as described in the specification.
 data InfoDictionary = InfoDictionary {
@@ -28,7 +32,7 @@ data InfoDictionary = InfoDictionary {
                     , pieces      :: ByteString
                     , private     :: Maybe Bool
                     , files       :: [FileInfo]
-                    } deriving(Eq, Show)
+                    } deriving(Eq, Show, Generic, NFData)
 
 -- | Holds MetaInfo data as described in the specification.
 data MetaInfo = MetaInfo {
@@ -36,7 +40,7 @@ data MetaInfo = MetaInfo {
                 , infoHash :: ByteString
                 , announce :: ByteString
                 , creationDate :: Maybe Word32
-                } deriving(Eq, Show)
+                } deriving(Eq, Show, Generic, NFData)
 
 -- | Parses a 'BValue' to extract the MetaInfo dictionary.
 parseMetaInfo :: BValue -> Maybe MetaInfo

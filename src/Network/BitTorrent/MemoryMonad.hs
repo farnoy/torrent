@@ -19,6 +19,8 @@ module Network.BitTorrent.MemoryMonad (
 , modifyBitfield
 , getAvailability
 , modifyAvailability
+, getRequestablePieces
+, modifyRequestablePieces
 
 -- run
 , runMemoryMonadSTM
@@ -27,6 +29,7 @@ module Network.BitTorrent.MemoryMonad (
 import Control.Concurrent.STM.TVar
 import Control.Monad.Free.Church
 import Control.Monad.STM
+import Data.IntSet (IntSet)
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Types
@@ -38,6 +41,8 @@ data MemoryMonad a = GetChunks (Chunks -> a)
                    | ModifyBitfield (BF.BitField -> BF.BitField) a
                    | ReadAvailability (AvailabilityData -> a)
                    | ModifyAvailability (AvailabilityData -> AvailabilityData) a
+                   | ReadRequestablePieces (IntSet -> a)
+                   | ModifyRequestablePieces (IntSet -> IntSet) a
                    deriving(Functor)
 
 -- | Gets 'Chunks'.
@@ -77,6 +82,16 @@ modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F MemoryMonad ()
 modifyAvailability mut = liftF $ ModifyAvailability mut ()
 {-# INLINABLE modifyAvailability #-}
 
+-- | Gets requestable pieces.
+getRequestablePieces :: F MemoryMonad IntSet
+getRequestablePieces = liftF $ ReadRequestablePieces id
+{-# INLINABLE getRequestablePieces #-}
+
+-- | Modifies requestable pieces.
+modifyRequestablePieces :: (IntSet -> IntSet) -> F MemoryMonad ()
+modifyRequestablePieces mut = liftF $ ModifyRequestablePieces mut ()
+{-# INLINABLE modifyRequestablePieces #-}
+
 evalMemoryMonad :: ClientState -> MemoryMonad (STM a) -> STM a
 evalMemoryMonad state (GetChunks next) = do
   chunks <- readTVar (pieceChunks state)
@@ -95,6 +110,12 @@ evalMemoryMonad state (ReadAvailability next) = do
   next res
 evalMemoryMonad state (ModifyAvailability mut next) = do
   modifyTVar' (availabilityData state) mut
+  next
+evalMemoryMonad state (ReadRequestablePieces next) = do
+  res <- readTVar (requestablePieces state)
+  next res
+evalMemoryMonad state (ModifyRequestablePieces mut next) = do
+  modifyTVar' (requestablePieces state) mut
   next
 
 -- | Runs the whole transaction atomically under STM.
