@@ -42,7 +42,6 @@ getNextPiece bf av = PieceId . fromIntegral . fst <$> g
                                else orig
               Nothing -> Just (index, availability)
             ) Nothing av
-{-# INLINABLE getNextPiece #-}
 
 -- | Retrieves all incomplete pieces.
 getIncompletePieces :: BitField -> [Word32]

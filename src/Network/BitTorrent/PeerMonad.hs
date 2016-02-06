@@ -28,6 +28,9 @@ module Network.BitTorrent.PeerMonad (
 , entryPoint
 #ifdef TESTING
 , requestNextChunk
+, nextRequestOperation
+, receiveChunk
+, RequestOperation(..)
 #endif
 
 -- * Operations
@@ -50,6 +53,7 @@ module Network.BitTorrent.PeerMonad (
 
 import Control.Concurrent
 import Control.Concurrent.Async
+import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
@@ -362,7 +366,7 @@ receiveChunk :: PieceId -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk piece offset d = do
   let chunkIndex = ChunkId (divideSize offset defaultChunkSize)
 
-  wasMarked <- runMemory $ do
+  wasMarked <- runMemory $ {-# SCC "receiveChunk--memory" #-} do
     chunks <- getChunks
     case Map.lookup piece chunks of
       Just (chunkField, chunkData) -> do
@@ -392,7 +396,7 @@ processPiece piece@(PieceId pieceId) = do
   let infoDict = info meta
       defaultPieceLen = pieceLength infoDict
 
-  dataToWrite <- runMemory $ do
+  dataToWrite <- runMemory $ {-# SCC "processPiece--memory" #-} do
     Just (chunkField, d) <- Map.lookup piece <$> getChunks
     let getPieceHash (PieceId n) =
           B.take 20 $ B.drop (fromIntegral n * 20) $ pieces infoDict
@@ -475,12 +479,12 @@ nextRequestOperation peerData meta = do
   let peersBitField = peerBitField peerData
       infoDict = info meta
       defaultPieceLen = pieceLength infoDict
-      totalSize = sum (Meta.length <$> Meta.files infoDict)
+      totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
 
-      requestedBitField = BF.fromChunkFields (BF.length peersBitField)
+      requestedBitField = {-# SCC "requestedBitField" #-} force $ BF.fromChunkFields (BF.length peersBitField)
                                              (Map.toList (fst <$> chunks))
-      completedBitField = BF.union ourBitField requestedBitField
-      pendingBitField = BF.negate $ BF.difference peersBitField completedBitField
+      completedBitField = {-# SCC "completedBitField" #-} force $ BF.union ourBitField requestedBitField
+      pendingBitField = {-# SCC "pendingBitField" #-} force $ BF.negate $ BF.difference peersBitField completedBitField
       -- logic for the bitfield operations is:
       -- still_needed = peer's - (ours + fully_requested)
       -- negation is only for getNextPiece, but that should be

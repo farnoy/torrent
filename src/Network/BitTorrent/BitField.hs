@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 -- | Provides operations for BitFields that are used in the protocol.
 module Network.BitTorrent.BitField (
@@ -15,12 +17,14 @@ module Network.BitTorrent.BitField (
 , Network.BitTorrent.BitField.negate
 ) where
 
+import Control.DeepSeq
 import Data.Bits
 import Data.ByteString (ByteString)
 import Data.Foldable as Foldable
 import qualified Data.ByteString as B
 import Data.Monoid
 import Data.Word
+import GHC.Generics (Generic)
 import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
@@ -31,7 +35,7 @@ import Network.BitTorrent.Utility
 data BitField = BitField
   { raw :: ByteString -- ^ Raw byte array.
   , length :: Word32 -- ^ Length of the bitfield.
-  } deriving(Show, Eq)
+  } deriving(Show, Eq, Generic, NFData)
 
 -- | /O(n)/ Creates a new bitfield with the specified length.
 -- Starts out with all pieces marked as unfinished.
