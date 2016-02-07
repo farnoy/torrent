@@ -221,7 +221,9 @@ registerActiveChunk pieceId chunkId = liftF $ RegisterActiveChunk pieceId chunkI
 -- __NOTE:__ This is a temporary solution until storing
 -- custom data is provided by 'PeerMonad'.
 deregisterActiveChunk :: PieceId -> ChunkId -> F PeerMonad ()
-deregisterActiveChunk pieceId chunkId = liftF $ DeregisterActiveChunk pieceId chunkId ()
+deregisterActiveChunk pieceId chunkId = do
+  log $ \peerid -> logDebugN $ "DEREGISTER " <> peerid <> " " <> T.pack (show (pieceId, chunkId))
+  liftF $ DeregisterActiveChunk pieceId chunkId ()
 {-# INLINABLE deregisterActiveChunk #-}
 
 -- | Gets all remaining active chunks.
@@ -363,7 +365,11 @@ evalPeerMonadIO (GetTime next) = liftIO getCurrentTime >>= next
 evalPeerMonadIO (Throw e next) = Except.throwError e *> next
 evalPeerMonadIO (Catch action handler) =
   Except.catchError action handler
-evalPeerMonadIO (Log exp next) = lift (lift (lift exp)) *> next
+evalPeerMonadIO (Log exp next) = do
+  let filter _ LevelDebug = False
+      filter _ _ = True
+  lift . lift . lift . filterLogger filter $ exp
+  next
 
 receiveChunk :: PieceId -> Word32 -> ByteString -> F PeerMonad ()
 receiveChunk piece offset d = do
@@ -378,6 +384,7 @@ receiveChunk piece offset d = do
         return True
       _ -> return False -- someone already filled this
 
+  log $ \peerid -> logDebugN $ "Finished " <> peerid <> " " <> T.pack (show (piece, chunkIndex))
   deregisterActiveChunk piece chunkIndex
   pData <- getPeerData
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
@@ -426,13 +433,15 @@ processPiece piece@(PieceId pieceId) = do
                                       PS.removeFromAvailability bitfield)
                   {-# SCC "modifyRequestablePieces" #-} modifyRequestablePieces (`IntSet.difference` IntSet.singleton (fromIntegral pieceId))
                   return (Just d)
-                else return Nothing -- we remove it from Chunks
+                else return $ Just "hashFail" -- we remove it from Chunks
                                     -- but do not modify the bitfield,
                                     -- it will be reacquired again
             False -> return Nothing
         Nothing -> return Nothing
 
     case dataToWrite of
+      Just "hashFail" ->
+        log $ \peerid -> logDebugN $ "Hashfail " <> peerid <> " " <> T.pack (show pieceId)
       Just d -> {-# SCC "processPiece--writeData" #-} writeData (defaultPieceLen * pieceId) d
       Nothing -> return ()
 
@@ -606,6 +615,7 @@ requestNextChunk = do
 
       case operation of
         Just (RequestChunk pieceId chunkId pwpRequest) -> do
+          log $ \peerid -> logDebugN $ "Acquiring " <> peerid <> " " <> T.pack (show (pieceId, chunkId))
           registerActiveChunk pieceId chunkId
           let modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
           updatePeerData modifiedPeer
@@ -648,6 +658,7 @@ releaseActiveChunk pieceId chunkId = do
           Nothing -> chunks
     Nothing -> pure ()
 
+  log $ \peerid -> logDebugN $ "Releasing " <> peerid <> " " <> T.pack (show (pieceId, chunkId))
   deregisterActiveChunk pieceId chunkId
 
 -- | Runs the peer loop, processing all events.
@@ -668,17 +679,16 @@ entryPoint = catchError processEvent onError
 
           when (Prelude.null keys) requestNextChunk
         onError ConnectionLost = do
-          log $ \peerid -> logDebugN $ "ConnectionLost to " <> peerid
+          log $ \peerid -> logInfoN $ "ConnectionLost to " <> peerid
           cleanup
         onError (AssertionFailed what) = do
-          log $ \peerid -> logDebugN $ "AssertionFailed for " <> peerid <> " with " <> T.pack what
+          log $ \peerid -> logErrorN $ "AssertionFailed for " <> peerid <> " with " <> T.pack what
           cleanup
         cleanup = do
           activeChunks <- getActiveChunks
           pData <- getPeerData
           updatePeerData $ pData { peerDataStopping = True }
           let keys = fst <$> Map.toList activeChunks
-          log $ const $ logDebugN "kek"
-          log $ \peerid -> logDebugN $ "exiting from " <> peerid <> " and releasing " <> T.pack (show keys)
+          log $ \peerid -> logInfoN $ "exiting from " <> peerid <> " and releasing " <> T.pack (show keys)
           traverse_ (uncurry releaseActiveChunk) keys
 
