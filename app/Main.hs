@@ -30,24 +30,29 @@ main = do
   case res of
     Just meta -> do
       clientState <- newClientState "." meta globalPort
-      void $ btListen clientState
+      listener <- btListen clientState
       peers <- queryTracker clientState
       promises <- traverse (async . reachOutToPeer clientState) peers
       -- dont do this here in the future
       void $ forkIO $ progressLogger clientState
       void $ forkIO $ sharedMessagesLogger clientState
       void $ forkIO $ periodicCheckup clientState
-      void $ installHandler sigINT (CatchOnce (cleanup clientState promises)) Nothing
+      void $ installHandler sigINT (CatchOnce (cleanup clientState promises listener)) Nothing
       waitOnPeers promises
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
 
-cleanup :: ClientState -> [Async a] -> IO ()
-cleanup state promises = do
+cleanup :: ClientState -> [Async a] -> Async b -> IO ()
+cleanup state promises listener = do
+  writeChan (sharedMessages state) Exit
+  cancel listener
+  putStrLn "waiting 5 seconds to kill all"
+  threadDelay 5000000
   traverse_ cancel promises
   traverse_ (\(_, _, handle) -> hClose handle) (outputHandles state)
 
 waitOnPeers :: [Async a] -> IO ()
+waitOnPeers [] = return ()
 waitOnPeers promises = do
   (finished, res) <- waitAnyCatch promises
   putStrLn "promise exited"

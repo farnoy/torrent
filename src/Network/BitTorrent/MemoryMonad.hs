@@ -17,8 +17,8 @@ module Network.BitTorrent.MemoryMonad (
 , modifyChunks
 , getBitfield
 , modifyBitfield
-, getAvailability
-, modifyAvailability
+-- , getAvailability
+-- , modifyAvailability
 , getRequestablePieces
 , modifyRequestablePieces
 
@@ -27,11 +27,12 @@ module Network.BitTorrent.MemoryMonad (
 ) where
 
 import Control.Concurrent.STM.TVar
+import Control.DeepSeq
 import Control.Monad.Free.Church
 import Control.Monad.STM
 import Data.IntSet (IntSet)
 import qualified Network.BitTorrent.BitField as BF
-import Network.BitTorrent.PieceSelection as PS
+-- import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Types
 
 -- | Encodes memory operations.
@@ -39,8 +40,10 @@ data MemoryMonad a = GetChunks (Chunks -> a)
                    | ModifyChunks (Chunks -> Chunks) a
                    | ReadBitfield (BF.BitField -> a)
                    | ModifyBitfield (BF.BitField -> BF.BitField) a
+                   {-
                    | ReadAvailability (AvailabilityData -> a)
                    | ModifyAvailability (AvailabilityData -> AvailabilityData) a
+                   -}
                    | ReadRequestablePieces (IntSet -> a)
                    | ModifyRequestablePieces (IntSet -> IntSet) a
                    deriving(Functor)
@@ -65,6 +68,8 @@ modifyBitfield :: (BF.BitField -> BF.BitField) -> F MemoryMonad ()
 modifyBitfield mut = liftF $ ModifyBitfield mut ()
 {-# INLINABLE modifyBitfield #-}
 
+{-
+
 -- | Gets 'AvailabilityData'.
 getAvailability :: F MemoryMonad AvailabilityData
 getAvailability = liftF $ ReadAvailability id
@@ -81,6 +86,7 @@ getAvailability = liftF $ ReadAvailability id
 modifyAvailability :: (AvailabilityData -> AvailabilityData) -> F MemoryMonad ()
 modifyAvailability mut = liftF $ ModifyAvailability mut ()
 {-# INLINABLE modifyAvailability #-}
+-}
 
 -- | Gets requestable pieces.
 getRequestablePieces :: F MemoryMonad IntSet
@@ -97,25 +103,27 @@ evalMemoryMonad state (GetChunks next) = do
   chunks <- readTVar (pieceChunks state)
   next chunks
 evalMemoryMonad state (ModifyChunks f next) = do
-  modifyTVar' (pieceChunks state) f
+  modifyTVar' (pieceChunks state) (force . f)
   next
 evalMemoryMonad state (ReadBitfield next) = do
   res <- readTVar (bitField state)
   next res
 evalMemoryMonad state (ModifyBitfield mut next) = do
-  modifyTVar' (bitField state) mut
+  modifyTVar' (bitField state) (force . mut)
   next
+{-
 evalMemoryMonad state (ReadAvailability next) = do
   res <- readTVar (availabilityData state)
   next res
 evalMemoryMonad state (ModifyAvailability mut next) = do
-  modifyTVar' (availabilityData state) mut
+  modifyTVar' (availabilityData state) (force . mut)
   next
+-}
 evalMemoryMonad state (ReadRequestablePieces next) = do
   res <- readTVar (requestablePieces state)
   next res
 evalMemoryMonad state (ModifyRequestablePieces mut next) = do
-  modifyTVar' (requestablePieces state) mut
+  modifyTVar' (requestablePieces state) (force . mut)
   next
 
 -- | Runs the whole transaction atomically under STM.

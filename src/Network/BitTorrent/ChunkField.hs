@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
+
 -- | ChunkFields are used to track download progress within a
 -- single piece.
 --
@@ -19,8 +22,10 @@ module Network.BitTorrent.ChunkField (
 , isRequested
 ) where
 
+import Control.DeepSeq
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IntSet
+import GHC.Generics (Generic)
 import Network.BitTorrent.Utility
 
 -- | Stores status of chunks inside a single piece.
@@ -28,7 +33,7 @@ data ChunkField = ChunkField
   { missingChunks :: IntSet -- ^ Missing chunks
   , requestedChunks :: IntSet -- ^ Requested chunks
   , completedChunks :: IntSet -- ^ Completed chunks
-  } deriving(Eq, Show)
+  } deriving(Eq, Show, Generic, NFData)
 
 -- | Creates a new 'ChunkField' with specified length and all
 -- chunks marked as missing.

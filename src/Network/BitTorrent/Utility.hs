@@ -1,4 +1,7 @@
 {-# OPTIONS_HADDOCK hide #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveAnyClass #-}
+
 module Network.BitTorrent.Utility (
   divideSize
 , boolToWord
@@ -7,8 +10,10 @@ module Network.BitTorrent.Utility (
 , ChunkId(..)
 ) where
 
+import Control.DeepSeq
 import Data.Sequence
 import Data.Word
+import GHC.Generics (Generic)
 
 divideSize :: Integral a => a -> a -> a
 divideSize a b | a `rem` b > 0 = (a `quot` b) + 1
@@ -21,10 +26,10 @@ boolToWord False = 0
 {-# INLINABLE boolToWord #-}
 
 -- | Holds the piece id.
-newtype PieceId = PieceId Word32 deriving(Eq, Show, Ord)
+newtype PieceId = PieceId Word32 deriving(Eq, Show, Ord, Generic, NFData)
 
 -- | Holds the chunk id.
-newtype ChunkId = ChunkId Word32 deriving(Eq, Show, Ord)
+newtype ChunkId = ChunkId Word32 deriving(Eq, Show, Ord, Generic, NFData)
 
 -- | Finds overlaps of any range with given array.
 fileOverlap :: Seq (Word32, Word32, Word32, a) -- ^ Left-inclusive ranges to look in + user data

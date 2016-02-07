@@ -39,7 +39,7 @@ import SpecHelper
 
 data Memory = Memory { memoryBitField :: BF.BitField
                      , memoryPieceChunks :: Chunks
-                     , memoryAvailabilityData :: PS.AvailabilityData
+                     -- , memoryAvailabilityData :: PS.AvailabilityData
                      , memoryRequestablePieces :: IntSet
                      }
 
@@ -47,7 +47,7 @@ clientStateToMemory :: ClientState -> IO Memory
 clientStateToMemory state = atomically (Memory
                                            <$> readTVar (bitField state)
                                            <*> readTVar (pieceChunks state)
-                                           <*> readTVar (availabilityData state)
+                                           -- <*> readTVar (availabilityData state)
                                            <*> readTVar (requestablePieces state))
 
 type MemoryMonadTest = StateT Memory Identity
@@ -56,6 +56,7 @@ runMemoryMonadTest :: Memory -> F MemoryMonad a -> (a, Memory)
 runMemoryMonadTest mem t = runIdentity (runStateT (iterM evalMemoryMonadTest t) mem)
 
 evalMemoryMonadTest :: MemoryMonad (MemoryMonadTest a) -> MemoryMonadTest a
+{-
 evalMemoryMonadTest (ModifyAvailability mut next) = do
   memory <- get
   put $ memory { memoryAvailabilityData = mut (memoryAvailabilityData memory) }
@@ -63,6 +64,7 @@ evalMemoryMonadTest (ModifyAvailability mut next) = do
 evalMemoryMonadTest (ReadAvailability next) = do
   memory <- get
   next $ memoryAvailabilityData memory
+  -}
 evalMemoryMonadTest (ReadBitfield next) = do
   memory <- get
   next $ memoryBitField memory

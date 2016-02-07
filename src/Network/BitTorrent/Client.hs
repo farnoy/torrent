@@ -12,9 +12,9 @@ module Network.BitTorrent.Client (
 ) where
 
 import Control.Concurrent
+import Control.Concurrent.Async
 import Control.Concurrent.STM.TVar
 import Control.Monad
-import Control.Monad.STM
 import Crypto.Hash.SHA1
 import Data.Binary
 import Data.Binary.Get
@@ -30,7 +30,6 @@ import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import Data.UUID hiding (fromByteString)
 import Data.UUID.V4
-import qualified Data.Vector.Unboxed as VU
 -- import Hexdump
 import Lens.Family2
 import Network.BitTorrent.Bencoding
@@ -62,10 +61,9 @@ newClientState dir meta listenPort = do
   requestable_pieces <- newTVarIO $ IntSet.fromList [0..(numPieces-1)]
   bit_field <- newTVarIO $ BF.newBitField numPieces
   handles <- openHandles dir meta
-  avData <- newTVarIO $ VU.replicate numPieces 0
   mvar <- newMVar ()
   sharedMessages <- newChan
-  return $ ClientState peer meta bit_field requestable_pieces chunks handles mvar listenPort avData sharedMessages
+  return $ ClientState peer meta bit_field requestable_pieces chunks handles mvar listenPort sharedMessages
 
 openHandles :: FilePath -> MetaInfo -> IO (Seq (Word32, Word32, Handle))
 openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
@@ -77,38 +75,44 @@ openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops
 -- with them.
-btListen :: ClientState -> IO Socket
+btListen :: ClientState -> IO (Async ())
 btListen state = do
   sock <- socket AF_INET Stream defaultProtocol
   setSocketOption sock ReuseAddr 1
   bind sock (SockAddrInet (fromIntegral $ ourPort state) 0)
-  listen sock 10
-  forkIO $ forever $ do
+  listen sock 1
+  async $ forever $ do
     (sock', addr) <- accept sock
     forkIO $ startFromPeerHandshake state sock' addr
-  return sock
 
 startFromPeerHandshake :: ClientState -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
-  Just (BHandshake hisInfoHash peer) <- readHandshake handle
+  handshake <- readHandshake handle
 
-  let ourInfoHash = infoHash $ metaInfo state
-      cond = hisInfoHash == ourInfoHash
-      -- && Map.notMember peer ourPeers -- for later
-      bf = BF.newBitField (pieceCount state)
+  case handshake of
+    Just (BHandshake hisInfoHash peer) -> do
+      let ourInfoHash = infoHash $ metaInfo state
+          cond = hisInfoHash == ourInfoHash
+          -- && Map.notMember peer ourPeers -- for later
+          bf = BF.newBitField (pieceCount state)
 
-  when cond $ do
-    writeHandshake handle state
-    let pData = newPeer bf addr peer
+      if cond
+        then do
+          writeHandshake handle state
+          let pData = newPeer bf addr peer
 
-    bf <- atomically $
-      readTVar (bitField state)
+          {-
+          bf <- atomically $
+            readTVar (bitField state)
 
-    BL.hPut handle (encode $ BF.toPWP bf)
+          BL.hPut handle (encode $ BF.toPWP bf)
+          -}
 
-    mainPeerLoop state pData handle
-    pure ()
+          mainPeerLoop state pData handle
+          pure ()
+        else hClose handle
+    _ -> hClose handle
 
 pieceCount :: ClientState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
@@ -121,15 +125,18 @@ reachOutToPeer state addr = do
   handle <- socketToHandle sock ReadWriteMode
 
   writeHandshake handle state
-  Just (BHandshake hisInfoHash hisId) <- readHandshake handle
+  handshake <- readHandshake handle
 
-  let ourInfoHash = infoHash $ metaInfo state
-      bitField = BF.newBitField (pieceCount state)
+  case handshake of
+    Just (BHandshake hisInfoHash hisId) -> do
+      let ourInfoHash = infoHash $ metaInfo state
+          bitField = BF.newBitField (pieceCount state)
 
-  when (hisInfoHash == ourInfoHash) $ do
-    let pData = newPeer bitField addr hisId
-    mainPeerLoop state pData handle
-    pure ()
+      when (hisInfoHash == ourInfoHash) $ do
+        let pData = newPeer bitField addr hisId
+        mainPeerLoop state pData handle
+        pure ()
+    Nothing -> hClose handle
 
 writeHandshake :: Handle -> ClientState -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
@@ -139,7 +146,7 @@ writeHandshake handle state = BL.hPut handle handshake
 readHandshake :: Handle -> IO (Maybe BHandshake)
 readHandshake handle = do
   input <- BL.hGet handle 68
-  case runGetOrFail get input of
+  case decodeOrFail input of
     Left _ -> pure Nothing -- the handshake is wrong/unsupported
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}

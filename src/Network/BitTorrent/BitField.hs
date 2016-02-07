@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE BangPatterns #-}
+
 -- | Provides operations for BitFields that are used in the protocol.
 module Network.BitTorrent.BitField (
   BitField(..)
@@ -33,7 +35,7 @@ import Network.BitTorrent.Utility
 -- Works by using tightly packed bits to store this information efficiently.
 -- Can describe 8 piece statuses per byte.
 data BitField = BitField
-  { raw :: ByteString -- ^ Raw byte array.
+  { raw :: !ByteString -- ^ Raw byte array.
   , length :: Word32 -- ^ Length of the bitfield.
   } deriving(Show, Eq, Generic, NFData)
 

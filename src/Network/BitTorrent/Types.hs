@@ -1,3 +1,5 @@
+{-# LANGUAGE BangPatterns #-}
+
 -- | Exports useful types for other modules.
 module Network.BitTorrent.Types (
   maxRequestsPerPeer
@@ -25,7 +27,7 @@ import Data.Sequence (Seq)
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.MetaInfo as Meta
-import Network.BitTorrent.PieceSelection as PS
+-- import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Utility
 import Network.Socket
 import System.IO
@@ -36,15 +38,15 @@ maxRequestsPerPeer = 8
 
 -- | Stores information about a peer.
 data PeerData = PeerData {
-  amChoking :: Bool
-, amInterested :: Bool
-, peerChoking :: Bool
-, peerInterested :: Bool
+  amChoking :: !Bool
+, amInterested :: !Bool
+, peerChoking :: !Bool
+, peerInterested :: !Bool
 , address :: SockAddr
-, peerId :: ByteString
-, peerBitField :: BitField
-, requestsLive :: Word8
-, peerDataStopping :: Bool
+, peerId :: !ByteString
+, peerBitField :: !BitField
+, requestsLive :: !Word8
+, peerDataStopping :: !Bool
 } deriving(Eq, Show)
 
 -- | Stores information about the client application.
@@ -58,7 +60,7 @@ data ClientState = ClientState {
 , outputHandles :: Seq (Word32, Word32, Handle)
 , outputLock :: MVar ()
 , ourPort :: Word16
-, availabilityData :: TVar PS.AvailabilityData
+-- , availabilityData :: TVar PS.AvailabilityData
 , sharedMessages :: Chan SharedMessage
 }
 
@@ -69,7 +71,7 @@ newPeer bf addr peer =
 {-# INLINABLE newPeer #-}
 
 -- | Describes shared messages that can be broadcasted to peer loops.
-data SharedMessage = RequestPiece | Checkup deriving (Eq, Show)
+data SharedMessage = RequestPiece | Checkup | Exit deriving (Eq, Show)
 
 -- | Stores download progress for pieces.
 --
