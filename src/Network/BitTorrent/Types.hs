@@ -75,7 +75,7 @@ data SharedMessage = RequestPiece | Checkup deriving (Eq, Show)
 --
 -- For each piece that is being downloaded, holds the 'ChunkField' and
 -- the full buffer with data.
-type Chunks = Map PieceId (ChunkField, ByteString)
+type Chunks = Map PieceId ChunkField
 
 -- | Describes granularity of a request.
 --

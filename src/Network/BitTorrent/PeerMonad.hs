@@ -372,58 +372,69 @@ receiveChunk piece offset d = do
   wasMarked <- runMemory $ {-# SCC "receiveChunk--memory" #-} do
     chunks <- getChunks
     case Map.lookup piece chunks of
-      Just (chunkField, chunkData) -> do
-        do
-          -- copy the incoming data into appropriate place in chunkData
-          let (ptr, o, len) = BI.toForeignPtr chunkData
-              chunkVector = VS.unsafeFromForeignPtr ptr o len
-              (ptr', o', len') = BI.toForeignPtr d
-              dataVector = VS.unsafeFromForeignPtr ptr' o' len'
-              dest = VS.take (B.length d) $ VS.drop (fromIntegral offset) chunkVector
-              src = dataVector
-          unsafePerformIO $ VS.copy dest src >> return (return ())
+      Just chunkField -> do
         let chunkField' = CF.markCompleted chunkField chunkIndex
-
-        modifyChunks $ Map.insert piece (chunkField', chunkData)
+        modifyChunks $ Map.insert piece chunkField'
         return True
       _ -> return False -- someone already filled this
 
   deregisterActiveChunk piece chunkIndex
   pData <- getPeerData
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
-  when wasMarked $ processPiece piece
+
+  if wasMarked
+    then do
+      meta <- getMeta
+      let infoDict = info meta
+          defaultPieceLen = pieceLength infoDict
+          PieceId pix = piece
+      writeData (pix * defaultPieceLen + offset) d
+      processPiece piece
+    else return ()
 
 processPiece :: PieceId -> F PeerMonad ()
 processPiece piece@(PieceId pieceId) = do
   meta <- getMeta
   let infoDict = info meta
       defaultPieceLen = pieceLength infoDict
+      totalSize = sum (Meta.length <$> Meta.files infoDict)
+      pieceSize = expectedPieceSize totalSize defaultPieceLen piece
 
-  dataToWrite <- runMemory $ {-# SCC "processPiece--memory" #-} do
-    Just (chunkField, d) <- Map.lookup piece <$> getChunks
-    let getPieceHash (PieceId n) =
-          B.take 20 $ B.drop (fromIntegral n * 20) $ pieces infoDict
+  isCompleted <- runMemory $ do
+    cf <- fmap (Map.lookup piece) getChunks
+    return $ fmap CF.isCompleted cf
 
-    case CF.isCompleted chunkField of
-      True -> do
-        modifyChunks $ Map.delete piece
-        if hash d == getPieceHash piece
-          then do
-            bitfield <- getBitfield
-            let newBitfield = BF.set bitfield pieceId True
-            modifyBitfield (const newBitfield)
-            modifyAvailability (PS.addToAvailability newBitfield .
-                                PS.removeFromAvailability bitfield)
-            modifyRequestablePieces (`IntSet.difference` IntSet.singleton (fromIntegral pieceId))
-            return (Just d)
-          else return Nothing -- we remove it from Chunks
-                              -- but do not modify the bitfield,
-                              -- it will be reacquired again
-      False -> return Nothing
+  when (isCompleted == Just True) $ do
+    d <- readData (pieceId * defaultPieceLen) pieceSize
 
-  case dataToWrite of
-    Just d -> writeData (defaultPieceLen * pieceId) d
-    Nothing -> return ()
+    dataToWrite <- runMemory $ do
+      chunks <-  getChunks
+      case Map.lookup piece chunks of
+        Just chunkField -> do
+          let getPieceHash (PieceId n) =
+                B.take 20 $ B.drop (fromIntegral n * 20) $ pieces infoDict
+
+          case CF.isCompleted chunkField of
+            True -> {-# SCC "processPiece--onComplete" #-} do
+              {-# SCC "modifyChunks" #-} modifyChunks $ Map.delete piece
+              if ({-# SCC "hash-data" #-} hash d) == getPieceHash piece
+                then do
+                  bitfield <- getBitfield
+                  let newBitfield = {-# SCC "newBitField" #-} BF.set bitfield pieceId True
+                  {-# SCC "modifyChunks" #-} modifyBitfield (const newBitfield)
+                  {-# SCC "modifyAvailability" #-} modifyAvailability (PS.addToAvailability newBitfield .
+                                      PS.removeFromAvailability bitfield)
+                  {-# SCC "modifyRequestablePieces" #-} modifyRequestablePieces (`IntSet.difference` IntSet.singleton (fromIntegral pieceId))
+                  return (Just d)
+                else return Nothing -- we remove it from Chunks
+                                    -- but do not modify the bitfield,
+                                    -- it will be reacquired again
+            False -> return Nothing
+        Nothing -> return Nothing
+
+    case dataToWrite of
+      Just d -> {-# SCC "processPiece--writeData" #-} writeData (defaultPieceLen * pieceId) d
+      Nothing -> return ()
 
 handleBitfield :: ByteString -> F PeerMonad ()
 handleBitfield field = do
@@ -458,16 +469,16 @@ data RequestOperation = RequestChunk PieceId ChunkId PWP
 
 claimChunk :: Word32
            -> Word32
-           -> (CF.ChunkField, B.ByteString)
+           -> CF.ChunkField
            -> PieceId
            -> F MemoryMonad (Maybe RequestOperation)
-claimChunk totalSize pieceLen (chunkField, chunkData) piece@(PieceId pieceId) =
+claimChunk totalSize pieceLen chunkField piece@(PieceId pieceId) =
   case CF.getNextChunk chunkField of
     Just (chunkField', chunk@(ChunkId chunkId)) -> do
       let request = Request pieceId
                             (chunkId * defaultChunkSize)
                             (nextChunkSize piece chunk)
-      modifyChunks $ Map.insert piece (chunkField', chunkData)
+      modifyChunks $ Map.insert piece chunkField'
       return $ Just $ RequestChunk piece chunk request
     _ -> return Nothing
   where nextChunkSize :: PieceId -> ChunkId -> Word32
@@ -486,7 +497,7 @@ nextRequestOperation peerData meta = do
       totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
 
       requestedBitField = {-# SCC "requestedBitField" #-} force $ BF.fromChunkFields (BF.length peersBitField)
-                                             (Map.toList (fst <$> chunks))
+                                             (Map.toList chunks)
       completedBitField = {-# SCC "completedBitField" #-} force $ BF.union ourBitField requestedBitField
       pendingBitField = {-# SCC "pendingBitField" #-} force $ BF.negate $ BF.difference peersBitField completedBitField
       -- logic for the bitfield operations is:
@@ -507,10 +518,8 @@ nextRequestOperation peerData meta = do
           case Map.lookup piece chunks of
             Nothing -> do
               let chunksCount = chunksInPiece pieceLen defaultChunkSize
-                  chunkData = B.replicate (fromIntegral pieceLen) 0
                   chunkField = CF.newChunkField (fromIntegral chunksCount)
-                  chunkInfo = (chunkField, chunkData)
-              claimChunk totalSize pieceLen chunkInfo piece
+              claimChunk totalSize pieceLen chunkField piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
 
 nextRequestOperationLinear :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
@@ -526,7 +535,7 @@ nextRequestOperationLinear peerData meta = do
       findPiece n = case BF.get ourBitField n of
         False -> case Map.lookup (PieceId n) chunks of
           Nothing -> Just (PieceId n)
-          Just (chunkField, _) -> case CF.getNextChunk chunkField of
+          Just chunkField -> case CF.getNextChunk chunkField of
             Just _ -> Just (PieceId n)
             _ -> findPiece (n + 1)
         True -> findPiece (n + 1)
@@ -543,10 +552,8 @@ nextRequestOperationLinear peerData meta = do
           case Map.lookup piece chunks of
             Nothing -> do
               let chunksCount = chunksInPiece pieceLen defaultChunkSize
-                  chunkData = B.replicate (fromIntegral pieceLen) 0
                   chunkField = CF.newChunkField (fromIntegral chunksCount)
-                  chunkInfo = (chunkField, chunkData)
-              claimChunk totalSize pieceLen chunkInfo piece
+              claimChunk totalSize pieceLen chunkField piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
 
 nextRequestOperationLinearV2 :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
@@ -566,7 +573,7 @@ nextRequestOperationLinearV2 peerData meta = do
               next = findPiece (fromIntegral k + 1)
           in case Map.lookup piece chunks of
             Nothing -> Just piece
-            Just (chunkField, _) -> case CF.getNextChunk chunkField of
+            Just chunkField -> case CF.getNextChunk chunkField of
               Just _ -> Just piece
               _ -> next
             _ -> next
@@ -584,10 +591,8 @@ nextRequestOperationLinearV2 peerData meta = do
           case Map.lookup piece chunks of
             Nothing -> do
               let chunksCount = chunksInPiece pieceLen defaultChunkSize
-                  chunkData = B.replicate (fromIntegral pieceLen) 0
                   chunkField = CF.newChunkField (fromIntegral chunksCount)
-                  chunkInfo = (chunkField, chunkData)
-              claimChunk totalSize pieceLen chunkInfo piece
+              claimChunk totalSize pieceLen chunkField piece
             Just chunkInfo -> claimChunk totalSize pieceLen chunkInfo piece
 
 requestNextChunk :: F PeerMonad ()
@@ -637,9 +642,9 @@ releaseActiveChunk pieceId chunkId = do
     Just _ ->
       runMemory $ modifyChunks $ \chunks ->
         case Map.lookup pieceId chunks of
-          Just (cf, d) ->
+          Just cf ->
             let cf' = CF.markMissing cf chunkId
-            in Map.insert pieceId (cf', d) chunks
+            in Map.insert pieceId cf' chunks
           Nothing -> chunks
     Nothing -> pure ()
 

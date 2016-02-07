@@ -71,4 +71,4 @@ periodicCheckup state = forever $ do
   threadDelay 1000000
   writeChan (sharedMessages state) Checkup
   chunks <- atomically (readTVar (pieceChunks state))
-  print (CF.requestedChunks . fst <$> chunks)
+  print (CF.requestedChunks <$> chunks)
