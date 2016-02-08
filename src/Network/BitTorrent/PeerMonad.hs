@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- | Provides definiton for 'PeerMonad' and an IO based implementation
 -- for actual connections to use in the real world.
@@ -59,11 +60,12 @@ import Control.Monad
 import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
 import qualified Control.Monad.Except as Except
-import Control.Monad.Free.Church
+import Control.Monad.Identity
 import Control.Monad.Logger
 import Control.Monad.Reader
 import Control.Monad.STM
 import Control.Monad.State.Strict
+import Control.Monad.Trans.Free.Church
 import Crypto.Hash.SHA1
 import qualified Data.Binary as Binary
 import qualified Data.ByteString as B
@@ -159,6 +161,14 @@ instance Functor PeerMonad where
   fmap f (Catch action handler) = Catch (f action) (fmap f handler)
   fmap f (Log what next) = Log what (f next)
 
+class MonadPeer m where
+  -- | Get 'MetaInfo'.
+  getMeta :: m MetaInfo
+
+instance Monad m => MonadPeer (FT PeerMonad m) where
+  getMeta = liftF $ GetMeta id
+  {-# INLINABLE getMeta #-}
+
 -- | Run a MemoryMonad expression as a single, atomic transaction.
 runMemory :: F MemoryMonad a -> F PeerMonad a
 runMemory stm = liftF $ RunMemory stm id
@@ -173,11 +183,6 @@ getPeerData = liftF $ GetPeerData id
 emit :: PWP -> F PeerMonad ()
 emit pwp = liftF $ Emit pwp ()
 {-# INLINABLE emit #-}
-
--- | Get 'MetaInfo'.
-getMeta :: F PeerMonad MetaInfo
-getMeta = liftF $ GetMeta id
-{-# INLINABLE getMeta #-}
 
 -- | Read data from disk.
 readData :: Word64  -- ^ offset
@@ -563,7 +568,11 @@ handlePWP (Have ix) = handleHave (PieceId ix)
 handlePWP Interested = handleInterested
 handlePWP (Request ix offset len) = do
   peerData <- getPeerData
-  meta <- getMeta
+
+  let action :: FT PeerMonad (ReaderT Integer Identity) MetaInfo
+      action = getMeta
+
+  meta <- hoistFT (`runReaderT` 0) action
 
   unless (amChoking peerData) $ do
     let defaultPieceLen = pieceLength $ info meta

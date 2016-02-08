@@ -28,7 +28,7 @@ module Network.BitTorrent.MemoryMonad (
 
 import Control.Concurrent.STM.TVar
 import Control.DeepSeq
-import Control.Monad.Free.Church
+import Control.Monad.Trans.Free.Church
 import Control.Monad.STM
 import Data.IntSet (IntSet)
 import qualified Network.BitTorrent.BitField as BF
