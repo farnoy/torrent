@@ -22,7 +22,7 @@ import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 
 data FileInfo = FileInfo {
-  length :: Word32
+  length :: Word64
 , name   :: ByteString
 } deriving(Eq, Show, Generic, NFData)
 
@@ -48,11 +48,11 @@ parseMetaInfo bv = MetaInfo
                      <$> ((bv ^? bkey "info") >>= parseInfoDictionary)
                      <*> (hash . serialize <$> (bv ^? bkey "info"))
                      <*> bv ^? (bkey "announce" . bstring)
-                     <*> pure (bv ^? (bkey "creation date" . bnumber))
+                     <*> (pure (fromIntegral <$> bv ^? (bkey "creation date" . bnumber)))
 
 parseInfoDictionary :: BValue -> Maybe InfoDictionary
 parseInfoDictionary bv = InfoDictionary
-                           <$> bv ^? (bkey "piece length" . bnumber)
+                           <$> (fromIntegral <$> bv ^? (bkey "piece length" . bnumber))
                            <*> bv ^? (bkey "pieces" . bstring)
                            <*> pure ((==1) <$> bv ^? (bkey "private" . bnumber))
                            <*> parseFiles bv
@@ -67,7 +67,7 @@ parseFiles bv = (pure <$> parseSingleFile bv) <|> parseMultipleFiles
 
 parseSingleFile :: BValue -> Maybe FileInfo
 parseSingleFile bv = FileInfo
-                  <$> bv ^? (bkey "length" . bnumber)
+                  <$> (fromIntegral <$> bv ^? (bkey "length" . bnumber))
                   <*> (bv ^? (bkey "name" . bstring)
                    <|> parsePath bv)
 

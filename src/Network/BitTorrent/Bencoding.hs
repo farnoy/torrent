@@ -15,12 +15,11 @@ import Data.Foldable
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Monoid
-import Data.Word
 import Prelude hiding (take)
 
 -- | Holds a Bencoded value.
 data BValue = String ByteString
-            | Number Word32
+            | Number Integer
             | List [BValue]
             | Dictionary (Map ByteString BValue)
               deriving(Eq,Show)

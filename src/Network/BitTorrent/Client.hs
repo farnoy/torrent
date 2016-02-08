@@ -65,9 +65,9 @@ newClientState dir meta listenPort = do
   sharedMessages <- newChan
   return $ ClientState peer meta bit_field requestable_pieces chunks handles mvar listenPort sharedMessages
 
-openHandles :: FilePath -> MetaInfo -> IO (Seq (Word32, Word32, Handle))
+openHandles :: FilePath -> MetaInfo -> IO (Seq (Word64, Word64, Handle))
 openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
-  where opener :: (Word32, [(Word32, Word32, Handle)]) -> FileInfo -> IO (Word32, [(Word32, Word32, Handle)])
+  where opener :: (Word64, [(Word64, Word64, Handle)]) -> FileInfo -> IO (Word64, [(Word64, Word64, Handle)])
         opener (offset, list) (FileInfo l n) = do
           hdl <- openFile (dir </> BC.unpack n) ReadWriteMode
           return (offset + l, (offset, offset + l, hdl) : list)

@@ -57,7 +57,7 @@ data ClientState = ClientState {
 , bitField :: TVar BitField
 , requestablePieces :: TVar IntSet
 , pieceChunks :: TVar Chunks
-, outputHandles :: Seq (Word32, Word32, Handle)
+, outputHandles :: Seq (Word64, Word64, Handle)
 , outputLock :: MVar ()
 , ourPort :: Word16
 -- , availabilityData :: TVar PS.AvailabilityData
@@ -93,21 +93,22 @@ chunksInPiece = divideSize
 {-# INLINABLE chunksInPiece #-}
 
 -- | Calculates the piece size.
-expectedPieceSize :: Word32 -- ^ total size of all pieces
+expectedPieceSize :: Word64 -- ^ total size of all pieces
                   -> Word32 -- ^ piece size
                   -> PieceId
                   -> Word32
 expectedPieceSize totalSize pSize (PieceId pix) =
   if pix >= pCount
-    then if totalSize `rem` pSize == 0
+    then if totalSize `rem` pSize' == 0
          then pSize
-         else totalSize `rem` pSize
+         else fromIntegral $ totalSize `rem` pSize'
     else pSize
-  where pCount = divideSize totalSize pSize - 1
+  where pCount = fromIntegral $ divideSize totalSize pSize' - 1
+        pSize' = fromIntegral pSize
 {-# INLINABLE expectedPieceSize #-}
 
 -- | Calculates the chunk size.
-expectedChunkSize :: Word32  -- ^ total size of all pieces
+expectedChunkSize :: Word64  -- ^ total size of all pieces
                   -> Word32  -- ^ piece size
                   -> Word32  -- ^ default chunk size
                   -> PieceId -- ^ piece index

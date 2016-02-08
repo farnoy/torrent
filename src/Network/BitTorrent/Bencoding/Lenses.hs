@@ -17,7 +17,6 @@ module Network.BitTorrent.Bencoding.Lenses where
 import Control.Applicative
 import Data.ByteString.Char8 (ByteString)
 import qualified Data.Map.Strict as Map
-import Data.Word
 import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Prelude hiding (take)
@@ -28,7 +27,7 @@ bstring f (String s) = String <$> f s
 bstring _ bv = pure bv
 
 -- | Traverses a number value.
-bnumber :: Traversal' BValue Word32
+bnumber :: Traversal' BValue Integer
 bnumber f (Number n) = Number <$> f n
 bnumber _ bv = pure bv
 

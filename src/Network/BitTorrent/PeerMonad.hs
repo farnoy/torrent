@@ -130,8 +130,8 @@ data PeerMonad a = forall b. RunMemory (F MemoryMonad b) (b -> a)
                 | GetPeerData (PeerData -> a)
                 | Emit PWP a
                 | GetMeta (MetaInfo -> a)
-                | ReadData Word32 Word32 (ByteString -> a)
-                | WriteData Word32 ByteString a
+                | ReadData Word64 Word64 (ByteString -> a)
+                | WriteData Word64 ByteString a
                 | UpdatePeerData PeerData a
                 | GetPeerEvent (PeerEvent -> a)
                 | RegisterActiveChunk PieceId ChunkId a
@@ -180,14 +180,14 @@ getMeta = liftF $ GetMeta id
 {-# INLINABLE getMeta #-}
 
 -- | Read data from disk.
-readData :: Word32  -- ^ offset
-         -> Word32  -- ^ length
+readData :: Word64  -- ^ offset
+         -> Word64  -- ^ length
          -> F PeerMonad ByteString
 readData o l = liftF $ ReadData o l id
 {-# INLINABLE readData #-}
 
 -- | Write data to disk.
-writeData :: Word32     -- ^ offset
+writeData :: Word64     -- ^ offset
           -> ByteString -- ^ data
           -> F PeerMonad ()
 writeData o b = liftF $ WriteData o b ()
@@ -391,7 +391,7 @@ receiveChunk piece offset d = do
       let infoDict = info meta
           defaultPieceLen = pieceLength infoDict
           PieceId pix = piece
-      writeData (pix * defaultPieceLen + offset) d
+      writeData (fromIntegral pix * fromIntegral defaultPieceLen + fromIntegral offset) d
       processPiece piece
     else return ()
 
@@ -408,7 +408,7 @@ processPiece piece@(PieceId pieceId) = do
     return $ fmap CF.isCompleted cf
 
   when (isCompleted == Just True) $ do
-    d <- readData (pieceId * defaultPieceLen) pieceSize
+    d <- readData (fromIntegral pieceId * fromIntegral defaultPieceLen) (fromIntegral pieceSize)
 
     dataToWrite <- runMemory $ do
       chunks <-  getChunks
@@ -440,7 +440,7 @@ processPiece piece@(PieceId pieceId) = do
     case dataToWrite of
       Just "hashFail" ->
         log $ \peerid -> logDebugN $ "Hashfail " <> peerid <> " " <> T.pack (show pieceId)
-      Just d -> {-# SCC "processPiece--writeData" #-} writeData (defaultPieceLen * pieceId) d
+      Just d -> {-# SCC "processPiece--writeData" #-} writeData (fromIntegral defaultPieceLen * fromIntegral pieceId) d
       Nothing -> return ()
 
 handleBitfield :: ByteString -> F PeerMonad ()
@@ -476,7 +476,7 @@ handleInterested = do
 data RequestOperation = RequestChunk PieceId ChunkId PWP
                       | Raise PeerError
 
-claimChunk :: Word32
+claimChunk :: Word64
            -> Word32
            -> CF.ChunkField
            -> PieceId
@@ -567,7 +567,7 @@ handlePWP (Request ix offset len) = do
 
   unless (amChoking peerData) $ do
     let defaultPieceLen = pieceLength $ info meta
-    block <- readData (ix * defaultPieceLen + offset) len
+    block <- readData (fromIntegral ix * fromIntegral defaultPieceLen + fromIntegral offset) (fromIntegral len)
     emit (Piece ix offset block)
 handlePWP _ = return () -- logging?
 
@@ -591,14 +591,13 @@ releaseActiveChunk pieceId chunkId = do
 
 -- | Runs the peer loop, processing all events.
 entryPoint :: F PeerMonad ()
-entryPoint = do timeStart <- getTime
-                catchError (processEvent timeStart) onError
-  where processEvent t = forever (getPeerEvent >>= handler t)
-        handler _ (PWPEvent pwp) = handlePWP pwp
-        handler _ (ErrorEvent err) = throwError err
-        handler _ (SharedEvent RequestPiece) = requestNextChunk
-        handler _ (SharedEvent Exit) = throwError ConnectionLost
-        handler timeStart (SharedEvent Checkup) = do
+entryPoint = catchError processEvent onError
+  where processEvent = forever (getPeerEvent >>= handler)
+        handler (PWPEvent pwp) = handlePWP pwp
+        handler (ErrorEvent err) = throwError err
+        handler (SharedEvent RequestPiece) = requestNextChunk
+        handler (SharedEvent Exit) = throwError ConnectionLost
+        handler (SharedEvent Checkup) = do
           t <- getTime
           activeChunks <- getActiveChunks
           let timedOut = Map.filter (\date -> diffUTCTime t date > 10) activeChunks
@@ -608,9 +607,6 @@ entryPoint = do timeStart <- getTime
           traverse_ (uncurry releaseActiveChunk) keys
 
           when (Prelude.null keys) requestNextChunk
-
-          when (diffUTCTime t timeStart > 90) $ do
-            throwError ConnectionLost
         onError ConnectionLost = do
           log $ \peerid -> logInfoN $ "ConnectionLost to " <> peerid
           cleanup

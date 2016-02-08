@@ -14,14 +14,14 @@ import Network.BitTorrent.Utility
 import System.IO
 
 -- | Reads from the handle.
-read :: Seq (Word32, Word32, Handle)
+read :: Seq (Word64, Word64, Handle)
      -> MVar () -- ^ lock
-     -> Word32  -- ^ offset in bytes
-     -> Word32  -- ^ number of bytes to read
+     -> Word64  -- ^ offset in bytes
+     -> Word64  -- ^ number of bytes to read
      -> IO ByteString
 read hdls mvar offset size = withMVar mvar (const go)
   where go = traverse read overlapping >>= return . fold
-        read :: (Word32, Word32, Word32, Handle) -> IO ByteString
+        read :: (Word64, Word64, Word64, Handle) -> IO ByteString
         read (base, lo, hi, hdl) = do
           hSeek hdl AbsoluteSeek (fromIntegral $ lo - base)
           B.hGet hdl (fromIntegral $ min (hi - lo) size)
@@ -30,14 +30,14 @@ read hdls mvar offset size = withMVar mvar (const go)
 {-# INLINABLE read #-}
 
 -- | Writes to the handle.
-write :: Seq (Word32, Word32, Handle)
+write :: Seq (Word64, Word64, Handle)
       -> MVar ()    -- ^ lock
-      -> Word32     -- ^ offset in bytes
+      -> Word64     -- ^ offset in bytes
       -> ByteString -- ^ data to write
       -> IO ()
 write hdls mvar offset block = withMVar mvar (const go)
   where go = traverse_ write overlapping
-        write :: (Word32, Word32, Word32, Handle) -> IO ()
+        write :: (Word64, Word64, Word64, Handle) -> IO ()
         write (base, lo, hi, hdl) = do
           hSeek hdl AbsoluteSeek (fromIntegral $ lo - base)
           B.hPut hdl

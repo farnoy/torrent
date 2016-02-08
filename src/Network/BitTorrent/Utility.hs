@@ -32,10 +32,10 @@ newtype PieceId = PieceId Word32 deriving(Eq, Show, Ord, Generic, NFData)
 newtype ChunkId = ChunkId Word32 deriving(Eq, Show, Ord, Generic, NFData)
 
 -- | Finds overlaps of any range with given array.
-fileOverlap :: Seq (Word32, Word32, Word32, a) -- ^ Left-inclusive ranges to look in + user data
-            -> Word32                  -- ^ lower bound to lookup
-            -> Word32                  -- ^ upper bound to lookup
-            -> Seq (Word32, Word32, Word32, a)
+fileOverlap :: Seq (Word64, Word64, Word64, a) -- ^ Left-inclusive ranges to look in + user data
+            -> Word64                  -- ^ lower bound to lookup
+            -> Word64                  -- ^ upper bound to lookup
+            -> Seq (Word64, Word64, Word64, a)
 fileOverlap ranges lo hi = rightAdjusted
   where leftDropped = dropWhileL (\(_, _, h, _) -> h <= lo) ranges
         leftAdjusted = case viewl leftDropped of
