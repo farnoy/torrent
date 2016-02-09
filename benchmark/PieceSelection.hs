@@ -89,32 +89,4 @@ main = defaultMain [
     , env (setupFullDownload 128 64 ) (\e -> bench "128x64" $ whnfIO $ fullDownload nextRequestOperation e)
     , env (setupFullDownload 256 64 ) (\e -> bench "256x64" $ whnfIO $ fullDownload nextRequestOperation e)
   ]
-
-  , bgroup "linear algorithm, variable piece size" [
-      env (setupFullDownload 64  16 ) (\e -> bench "64x16"  $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 64  64 ) (\e -> bench "64x64"  $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 64  128) (\e -> bench "64x128" $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 64  256) (\e -> bench "64x256" $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    ]
-
-  , bgroup "linear algorithm, variable piece count" [
-      env (setupFullDownload 16  64 ) (\e -> bench "16x64"  $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 64  64 ) (\e -> bench "64x64"  $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 128 64 ) (\e -> bench "128x64" $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    , env (setupFullDownload 256 64 ) (\e -> bench "256x64" $ whnfIO $ fullDownload nextRequestOperationLinear e)
-    ]
-
-  , bgroup "super linear algorithm, variable piece size" [
-      env (setupFullDownload 64  16 ) (\e -> bench "64x16"  $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 64  64 ) (\e -> bench "64x64"  $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 64  128) (\e -> bench "64x128" $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 64  256) (\e -> bench "64x256" $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    ]
-
-  , bgroup "super linear algorithm, variable piece count" [
-      env (setupFullDownload 16  64 ) (\e -> bench "16x64"  $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 64  64 ) (\e -> bench "64x64"  $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 128 64 ) (\e -> bench "128x64" $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    , env (setupFullDownload 256 64 ) (\e -> bench "256x64" $ whnfIO $ fullDownload nextRequestOperationLinearV2 e)
-    ]
   ]

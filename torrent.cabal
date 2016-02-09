@@ -165,6 +165,38 @@ Benchmark piece-selection
     ghc-options: -O -Wall -fno-warn-name-shadowing
     cpp-options: -DTESTING
 
+Benchmark intset
+    type:       exitcode-stdio-1.0
+    hs-source-dirs: benchmark
+    main-is:    IntSet.hs
+    build-depends: base
+                 , async
+                 , attoparsec
+                 , base64-bytestring
+                 , binary
+                 , bytestring
+                 , bytestring-conversion
+                 , containers
+                 , criterion
+                 , cryptohash
+                 , deepseq
+                 , directory
+                 , exceptions
+                 , filepath
+                 , free
+                 , http-client
+                 , lens-family
+                 , mtl
+                 , monad-logger
+                 , network
+                 , stm
+                 , text
+                 , time
+                 , uuid
+                 , vector
+    ghc-options: -O -Wall -fno-warn-name-shadowing
+    cpp-options: -DTESTING
+
 source-repository head
   type:     git
   location: https://github.com/name/project
