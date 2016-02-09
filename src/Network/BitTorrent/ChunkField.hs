@@ -49,20 +49,19 @@ newChunkField n = ChunkField (IntSet.fromList [0..(n-1)])
 -- 'ChunkField' and its ID.
 getNextChunk :: ChunkField
              -> Maybe (ChunkField, ChunkId)
-getNextChunk cf@(ChunkField missing requested _) =
-  case IntSet.lookupGE 0 missing of
-    Just k -> Just (cf { missingChunks = IntSet.difference missing (IntSet.singleton k)
-                       , requestedChunks = IntSet.insert k requested
-                       }
-                   , ChunkId (fromIntegral k))
-    Nothing -> Nothing
+getNextChunk cf@(ChunkField missing requested _) = go (IntSet.null missing)
+  where go False = let (k, missing') = IntSet.deleteFindMin missing
+                   in Just (cf { missingChunks = missing'
+                               , requestedChunks = IntSet.insert k requested }
+                           , ChunkId (fromIntegral k))
+        go True = Nothing
 {-# INLINABLE getNextChunk #-}
 
 -- | Mark the chunk as completed.
 markCompleted :: ChunkField -> ChunkId -> ChunkField
 markCompleted cf@(ChunkField missing requested completed) (ChunkId ix) =
-  cf { requestedChunks = IntSet.difference requested (IntSet.singleton id)
-     , missingChunks = IntSet.difference missing (IntSet.singleton id)
+  cf { requestedChunks = IntSet.delete id requested
+     , missingChunks = IntSet.delete id missing
      , completedChunks = IntSet.insert id completed }
   where id = fromIntegral ix
 {-# INLINABLE markCompleted #-}
@@ -70,8 +69,8 @@ markCompleted cf@(ChunkField missing requested completed) (ChunkId ix) =
 -- | Mark the chunk as requested.
 markRequested :: ChunkField -> ChunkId -> ChunkField
 markRequested cf@(ChunkField missing requested completed) (ChunkId ix) =
-  cf { missingChunks = IntSet.difference missing (IntSet.singleton id)
-     , completedChunks = IntSet.difference completed (IntSet.singleton id)
+  cf { missingChunks = IntSet.delete id missing
+     , completedChunks = IntSet.delete id completed
      , requestedChunks = IntSet.insert id requested }
   where id = fromIntegral ix
 {-# INLINABLE markRequested #-}
@@ -80,8 +79,8 @@ markRequested cf@(ChunkField missing requested completed) (ChunkId ix) =
 markMissing :: ChunkField -> ChunkId -> ChunkField
 markMissing cf@(ChunkField missing requested completed) (ChunkId ix) =
   cf { missingChunks = IntSet.insert id missing
-     , requestedChunks = IntSet.difference requested (IntSet.singleton id)
-     , completedChunks = IntSet.difference completed (IntSet.singleton id) }
+     , requestedChunks = IntSet.delete id requested
+     , completedChunks = IntSet.delete id completed }
   where id = fromIntegral ix
 {-# INLINABLE markMissing #-}
 
