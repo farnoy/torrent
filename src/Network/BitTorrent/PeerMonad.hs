@@ -15,25 +15,19 @@
 -- to coordinate with other peer loops.
 module Network.BitTorrent.PeerMonad (
 -- * PeerMonad
-#ifdef TESTING
   PeerMonad(..)
 , PeerEvent(..)
 , handlePWP
-#else
-  PeerMonad()
-#endif
 , runPeerMonad
 , PeerError(..)
 , ActiveChunks
 
 -- * Actions
 , entryPoint
-#ifdef TESTING
 , requestNextChunk
 , nextRequestOperation
 , receiveChunk
 , RequestOperation(..)
-#endif
 
 -- * Operations
 , runMemory

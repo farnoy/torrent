@@ -27,7 +27,7 @@ library
                    , Network.BitTorrent.PieceSelection
                    , Network.BitTorrent.PWP
                    , Network.BitTorrent.Types
-  other-modules:   Network.BitTorrent.Utility
+                   , Network.BitTorrent.Utility
   ghc-options:   -Wall -O -fprof-auto -auto-all -caf-all -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
                  , async
@@ -82,7 +82,7 @@ executable torrent
 
 test-suite torrent-test
   type:                exitcode-stdio-1.0
-  hs-source-dirs:      src test
+  hs-source-dirs:      test
   main-is:             Spec.hs
   other-modules: BencodingSpec
                , BitFieldSpec
@@ -125,6 +125,7 @@ test-suite torrent-test
                      , smallcheck
                      , stm
                      , text
+                     , torrent
                      , time
                      , unordered-containers
                      , uuid
@@ -135,7 +136,7 @@ test-suite torrent-test
 
 Benchmark piece-selection
     type:       exitcode-stdio-1.0
-    hs-source-dirs: src benchmark
+    hs-source-dirs: benchmark
     main-is:    PieceSelection.hs
     build-depends: base
                  , async
@@ -159,11 +160,12 @@ Benchmark piece-selection
                  , network
                  , stm
                  , text
+                 , torrent
                  , time
                  , uuid
                  , vector
     ghc-options: -O -Wall -fno-warn-name-shadowing
-    cpp-options: -DTESTING
+    cpp-options:
 
 Benchmark intset
     type:       exitcode-stdio-1.0
@@ -191,11 +193,12 @@ Benchmark intset
                  , network
                  , stm
                  , text
+                 , torrent
                  , time
                  , uuid
                  , vector
     ghc-options: -O -Wall -fno-warn-name-shadowing
-    cpp-options: -DTESTING
+    cpp-options:
 
 source-repository head
   type:     git

@@ -6,11 +6,7 @@
 
 -- | Provides atomic transactions on shared memory.
 module Network.BitTorrent.MemoryMonad (
-#ifdef TESTING
   MemoryMonad(..)
-#else
-  MemoryMonad()
-#endif
 
 -- ops
 , getChunks
