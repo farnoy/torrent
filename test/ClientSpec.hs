@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 module ClientSpec where
 
 import Control.Concurrent
@@ -17,7 +16,6 @@ import Data.Functor
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Monoid
-import Language.Literals.Binary
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Client

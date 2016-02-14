@@ -1,4 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TupleSections #-}
 module PeerMonadSpec where
 
 import Control.Concurrent.Chan
@@ -23,12 +27,15 @@ import Data.Word
 import Network.BitTorrent.Bencoding
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.Client
+import qualified Network.BitTorrent.ChunkField as CF
+import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.MemoryMonad
 import Network.BitTorrent.PeerMonad
 import qualified Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
+import Network.BitTorrent.Utility
 import System.Directory
 import System.IO
 import System.Random
@@ -43,12 +50,26 @@ data Memory = Memory { memoryBitField :: BF.BitField
                      , memoryRequestablePieces :: IntSet
                      }
 
-clientStateToMemory :: ClientState -> IO Memory
-clientStateToMemory state = atomically (Memory
-                                           <$> readTVar (bitField state)
-                                           <*> readTVar (pieceChunks state)
-                                           -- <*> readTVar (availabilityData state)
-                                           <*> readTVar (requestablePieces state))
+class ClientStateDumper t where
+  clientStateToMemory :: ClientState t -> IO Memory
+
+instance ClientStateDumper 'Production where
+  clientStateToMemory state = atomically (Memory
+                                             <$> readTVar (bitField state)
+                                             <*> readPieceChunks state
+                                             -- <*> readTVar (availabilityData state)
+                                             <*> readTVar (requestablePieces state))
+
+    where readPieceChunks :: ClientState 'Production -> STM Chunks
+          readPieceChunks state =
+            fmap (Map.fromList . convert) (traverse lookup' [PieceId k | k <- [0..(pieceCount - 1)]])
+            where pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo $ state
+                  lookup' :: PieceId -> STM (Maybe (PieceId, CF.ChunkField))
+                  lookup' k = fmap (fmap (k,)) (DP.lookup k (clientStateDownloadProgress state))
+                  convert :: [Maybe (PieceId, CF.ChunkField)] -> [(PieceId, CF.ChunkField)]
+                  convert = foldl f []
+                  f accu (Just assoc) = assoc : accu
+                  f accu Nothing = accu
 
 type MemoryMonadTest = StateT Memory Identity
 
@@ -68,12 +89,16 @@ evalMemoryMonadTest (ReadAvailability next) = do
 evalMemoryMonadTest (ReadBitfield next) = do
   memory <- get
   next $ memoryBitField memory
-evalMemoryMonadTest (GetChunks next) = do
+evalMemoryMonadTest (GetDownloadProgress piece next) = do
   memory <- get
-  next $ memoryPieceChunks memory
-evalMemoryMonadTest (ModifyChunks mut next) = do
+  next $ Map.lookup piece (memoryPieceChunks memory)
+evalMemoryMonadTest (SetDownloadProgress piece cf next) = do
   memory <- get
-  put $ memory { memoryPieceChunks =  mut $ memoryPieceChunks memory }
+  put $ memory { memoryPieceChunks = Map.insert piece cf (memoryPieceChunks memory) }
+  next
+evalMemoryMonadTest (RemoveDownloadProgress piece next) = do
+  memory <- get
+  put $ memory { memoryPieceChunks = Map.delete piece (memoryPieceChunks memory) }
   next
 evalMemoryMonadTest (ReadRequestablePieces next) = do
   memory <- get
@@ -91,9 +116,9 @@ data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateCurrentTime :: UTCTime
                            }
 
-type PeerMonadTest = CatchT (ReaderT ClientState (StateT PeerState Identity))
+type PeerMonadTest t = CatchT (ReaderT (ClientState t) (StateT PeerState Identity))
 
-runPeerMonadTest :: ClientState
+runPeerMonadTest :: ClientState t
                  -> PeerData
                  -> Memory
                  -> [PeerEvent]
@@ -117,7 +142,7 @@ runPeerMonadTest state pData memory events t refTime =
                    peerState
                  )
 
-evalPeerMonadTest :: PeerMonad (PeerMonadTest a) -> PeerMonadTest a
+evalPeerMonadTest :: PeerMonad (PeerMonadTest t a) -> PeerMonadTest t a
 evalPeerMonadTest (GetPeerData next) = do
   PeerState pData _ _ _ _ _ <- get
   next pData
@@ -171,7 +196,6 @@ spec = do
       peerId = B.replicate (fromEnum '1') 20
       bf = BF.BitField (B.replicate (quot pieceCount 8) maxBound) pieceCount
       pData = newPeer bf addr peerId
-      withState :: ((ClientState, Memory) -> IO ()) -> IO ()
       withState f = do
         n <- randomIO :: IO Word16
         let dirName = tmpdir <> "/" <> show n

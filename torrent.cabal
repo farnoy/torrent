@@ -104,7 +104,6 @@ test-suite torrent-test
                      , attoparsec
                      , async
                      , binary
-                     , binary-literal-qq
                      , base64-bytestring
                      , bytestring
                      , bytestring-conversion
