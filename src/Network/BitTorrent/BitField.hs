@@ -7,16 +7,10 @@
 module Network.BitTorrent.BitField (
   BitField(..)
 , newBitField
-, fromChunkFields
 , get
 , set
 , completed
 , toPWP
--- * Useful operations
-, intersection
-, difference
-, union
-, Network.BitTorrent.BitField.negate
 ) where
 
 import Control.DeepSeq
@@ -45,54 +39,6 @@ newBitField :: Word32 -> BitField
 newBitField len = BitField (B.replicate (fromIntegral byteLength) 0) len
   where byteLength = divideSize len 8
 {-# INLINABLE newBitField #-}
-
--- | /O(n)/ Creates a bitfield out of multiple 'ChunkField's.
--- ChunkFields that satisfy 'CF.isRequested' are marked
--- as completed pieces in the resulting 'BitField'.
---
--- This is useful for figuring out which pieces are incomplete
--- but have been requested, particularly with `intersection`.
-fromChunkFields :: Word32 -- ^ Length of the new BitField
-                -> [(PieceId, ChunkField)] -- ^ Pairs of Piece ID and 'ChunkField'
-                -> BitField
-fromChunkFields len chunksOriginal =
-  BitField (snd $ B.mapAccumL f (PieceId 0, chunksOriginal) fresh) len
-  where byteLength = divideSize len 8
-        fresh = B.replicate (fromIntegral byteLength) 0
-        f (PieceId ix, chunks) w =
-          let (chunks', res) = foldl' (g ix) (chunks, w) [0..7]
-          in ((PieceId (ix + 8), chunks'), res)
-        {-# INLINABLE f #-}
-        g ix (chunks, byte) n = case chunks of
-          (PieceId currentIx, cf):restChunks | currentIx == ix + n ->
-            if CF.isRequested cf
-              then (restChunks, byte `setBit` fromIntegral (7 - n))
-              else (restChunks, byte)
-          _ -> (chunks, byte)
-        {-# INLINABLE g #-}
-
-
--- | /O(n)/ Returns the intersection of both bitfields.
-intersection :: BitField -> BitField -> BitField
-intersection (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
-  where f ix w = (ix + 1, w .&. B.index b ix)
-        {-# INLINABLE f #-}
-
--- | /O(n)/ Returns the union of both bitfields.
-union :: BitField -> BitField -> BitField
-union (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
-  where f ix w = (ix + 1, w .|. B.index b ix)
-        {-# INLINABLE f #-}
-
--- | /O(n)/ Returns the difference of bitfields. A \ B
-difference :: BitField -> BitField -> BitField
-difference (BitField a len) (BitField b _) = BitField (snd $ B.mapAccumL f 0 a) len
-  where f ix w = (ix + 1, w `xor` (w .&. B.index b ix))
-        {-# INLINABLE f #-}
-
--- | /O(n)/ Returns the bitfield with all values negated.
-negate :: BitField -> BitField
-negate (BitField a len) = BitField (B.map complement a) len
 
 -- | /O(1)/ Get the status of a single piece.
 get :: BitField -> Word32 -> Bool
