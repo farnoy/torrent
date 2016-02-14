@@ -20,6 +20,7 @@ library
                    , Network.BitTorrent.BitField
                    , Network.BitTorrent.ChunkField
                    , Network.BitTorrent.Client
+                   , Network.BitTorrent.DownloadProgress
                    , Network.BitTorrent.FileWriter
                    , Network.BitTorrent.MetaInfo
                    , Network.BitTorrent.MemoryMonad
@@ -28,7 +29,7 @@ library
                    , Network.BitTorrent.PWP
                    , Network.BitTorrent.Types
                    , Network.BitTorrent.Utility
-  ghc-options:   -Wall -O -fprof-auto -auto-all -caf-all -fno-warn-name-shadowing
+  ghc-options:   -Wall -O2 -fprof-auto -caf-all -fno-warn-name-shadowing -ddump-simpl -ddump-to-file
   build-depends:   base >= 4.7 && < 5
                  , async
                  , attoparsec
@@ -42,6 +43,7 @@ library
                  , exceptions
                  , filepath
                  , free
+                 , hashable
                  , http-client
                  , http-types
                  , ieee754
@@ -51,8 +53,10 @@ library
                  , network
                  , random
                  , stm
+                 , stm-containers
                  , text
                  , time
+                 , ttrie
                  , uuid
                  , vector
   default-language:    Haskell2010
@@ -60,7 +64,7 @@ library
 executable torrent
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall -O -fprof-auto -auto-all -fno-warn-name-shadowing
+  ghc-options:         -threaded -rtsopts -Wall -O2 -fprof-auto -fno-warn-name-shadowing
   build-depends:       base
                      , attoparsec
                      , async
@@ -130,7 +134,7 @@ test-suite torrent-test
                      , unordered-containers
                      , uuid
                      , vector
-  ghc-options:         -O -auto-all -caf-all -fprof-auto -Wall -fno-warn-name-shadowing
+  ghc-options:         -O2 -auto-all -caf-all -fprof-auto -Wall -fno-warn-name-shadowing
   cpp-options: -DTESTING
   default-language:    Haskell2010
 
@@ -164,7 +168,7 @@ Benchmark piece-selection
                  , time
                  , uuid
                  , vector
-    ghc-options: -O -Wall -fno-warn-name-shadowing
+    ghc-options: -O2 -Wall -fno-warn-name-shadowing
     cpp-options:
 
 Benchmark intset
@@ -197,7 +201,7 @@ Benchmark intset
                  , time
                  , uuid
                  , vector
-    ghc-options: -O -Wall -fno-warn-name-shadowing
+    ghc-options: -O2 -Wall -fno-warn-name-shadowing
     cpp-options:
 
 source-repository head

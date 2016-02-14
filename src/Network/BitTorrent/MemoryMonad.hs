@@ -1,6 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE CPP #-}
 
@@ -9,8 +13,9 @@ module Network.BitTorrent.MemoryMonad (
   MemoryMonad(..)
 
 -- ops
-, getChunks
-, modifyChunks
+, getDownloadProgress
+, setDownloadProgress
+, removeDownloadProgress
 , getBitfield
 , modifyBitfield
 -- , getAvailability
@@ -27,13 +32,18 @@ import Control.DeepSeq
 import Control.Monad.Trans.Free.Church
 import Control.Monad.STM
 import Data.IntSet (IntSet)
+import Debug.Trace (traceMarkerIO)
+import GHC.Conc (unsafeIOToSTM)
 import qualified Network.BitTorrent.BitField as BF
--- import Network.BitTorrent.PieceSelection as PS
+import qualified Network.BitTorrent.ChunkField as CF
+import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.Types
+import Network.BitTorrent.Utility
 
 -- | Encodes memory operations.
-data MemoryMonad a = GetChunks (Chunks -> a)
-                   | ModifyChunks (Chunks -> Chunks) a
+data MemoryMonad a = GetDownloadProgress PieceId (Maybe CF.ChunkField -> a)
+                   | SetDownloadProgress PieceId CF.ChunkField a
+                   | RemoveDownloadProgress PieceId a
                    | ReadBitfield (BF.BitField -> a)
                    | ModifyBitfield (BF.BitField -> BF.BitField) a
                    {-
@@ -44,15 +54,17 @@ data MemoryMonad a = GetChunks (Chunks -> a)
                    | ModifyRequestablePieces (IntSet -> IntSet) a
                    deriving(Functor)
 
--- | Gets 'Chunks'.
-getChunks :: F MemoryMonad Chunks
-getChunks = liftF $ GetChunks id
-{-# INLINABLE getChunks #-}
+getDownloadProgress :: PieceId -> F MemoryMonad (Maybe CF.ChunkField)
+getDownloadProgress piece = liftF $ GetDownloadProgress piece id
+{-# INLINABLE getDownloadProgress #-}
 
--- | Modifies 'Chunks'.
-modifyChunks :: (Chunks -> Chunks) -> F MemoryMonad ()
-modifyChunks mut = liftF $ ModifyChunks mut ()
-{-# INLINABLE modifyChunks #-}
+setDownloadProgress :: PieceId -> CF.ChunkField -> F MemoryMonad ()
+setDownloadProgress piece cf = liftF $ SetDownloadProgress piece cf ()
+{-# INLINABLE setDownloadProgress #-}
+
+removeDownloadProgress :: PieceId -> F MemoryMonad ()
+removeDownloadProgress piece = liftF $ RemoveDownloadProgress piece ()
+{-# INLINABLE removeDownloadProgress #-}
 
 -- | Gets 'BF.BitField'.
 getBitfield :: F MemoryMonad BF.BitField
@@ -94,12 +106,15 @@ modifyRequestablePieces :: (IntSet -> IntSet) -> F MemoryMonad ()
 modifyRequestablePieces mut = liftF $ ModifyRequestablePieces mut ()
 {-# INLINABLE modifyRequestablePieces #-}
 
-evalMemoryMonad :: ClientState -> MemoryMonad (STM a) -> STM a
-evalMemoryMonad state (GetChunks next) = do
-  chunks <- readTVar (pieceChunks state)
-  next chunks
-evalMemoryMonad state (ModifyChunks f next) = do
-  modifyTVar' (pieceChunks state) (force . f)
+evalMemoryMonad :: ClientState 'Production -> MemoryMonad (STM a) -> STM a
+evalMemoryMonad state (GetDownloadProgress piece next) = do
+  cf <- DP.lookup piece (clientStateDownloadProgress state)
+  next cf
+evalMemoryMonad state (SetDownloadProgress piece cf next) = do
+  DP.insert piece cf (clientStateDownloadProgress state)
+  next
+evalMemoryMonad state (RemoveDownloadProgress piece next) = do
+  DP.delete piece (clientStateDownloadProgress state)
   next
 evalMemoryMonad state (ReadBitfield next) = do
   res <- readTVar (bitField state)
@@ -123,5 +138,6 @@ evalMemoryMonad state (ModifyRequestablePieces mut next) = do
   next
 
 -- | Runs the whole transaction atomically under STM.
-runMemoryMonadSTM :: ClientState -> F MemoryMonad a -> STM a
-runMemoryMonadSTM state = iterM (evalMemoryMonad state)
+runMemoryMonadSTM :: ClientState 'Production -> F MemoryMonad a -> STM a
+runMemoryMonadSTM state m = iterM (evalMemoryMonad state) m `orElse` tracker
+  where tracker = unsafeIOToSTM (putStrLn "RETRIED" *> traceMarkerIO "retry") *> retry

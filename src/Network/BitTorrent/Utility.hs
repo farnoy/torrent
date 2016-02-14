@@ -1,9 +1,11 @@
 {-# OPTIONS_HADDOCK hide #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DataKinds #-}
 
 module Network.BitTorrent.Utility (
-  divideSize
+  ClassToken(..)
+, divideSize
 , boolToWord
 , fileOverlap
 , PieceId(..)
@@ -13,7 +15,10 @@ module Network.BitTorrent.Utility (
 import Control.DeepSeq
 import Data.Sequence
 import Data.Word
+import Data.Hashable
 import GHC.Generics (Generic)
+
+data ClassToken = Production | Pure
 
 divideSize :: Integral a => a -> a -> a
 divideSize a b | a `rem` b > 0 = (a `quot` b) + 1
@@ -26,7 +31,7 @@ boolToWord False = 0
 {-# INLINABLE boolToWord #-}
 
 -- | Holds the piece id.
-newtype PieceId = PieceId Word32 deriving(Eq, Show, Ord, Generic, NFData)
+newtype PieceId = PieceId Word32 deriving(Eq, Show, Ord, Generic, NFData, Hashable)
 
 -- | Holds the chunk id.
 newtype ChunkId = ChunkId Word32 deriving(Eq, Show, Ord, Generic, NFData)

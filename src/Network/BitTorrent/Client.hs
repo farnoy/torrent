@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DataKinds #-}
 {-# OPTIONS_GHC -fno-warn-unused-do-bind #-}
 -- | Implements most of the connection handling
 -- and initiates peer loops.
@@ -15,6 +16,7 @@ import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM.TVar
 import Control.Monad
+import Control.Monad.STM
 import Crypto.Hash.SHA1
 import Data.Binary
 import Data.Binary.Get
@@ -35,10 +37,12 @@ import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 import qualified Network.BitTorrent.BitField as BF
+import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
+import Network.BitTorrent.Utility
 import Network.HTTP.Client
 import Network.Socket
 import System.FilePath
@@ -51,9 +55,8 @@ globalPort = 8035
 newClientState :: FilePath -- ^ Output directory for downloaded files
                -> MetaInfo
                -> Word16 -- ^ Listen port
-               -> IO ClientState
+               -> IO (ClientState 'Production)
 newClientState dir meta listenPort = do
-  chunks <- newTVarIO Map.empty
   uuid <- nextRandom
   let peer = hash $ toASCIIBytes uuid
   let numPieces :: Integral a => a
@@ -63,7 +66,8 @@ newClientState dir meta listenPort = do
   handles <- openHandles dir meta
   mvar <- newMVar ()
   sharedMessages <- newChan
-  return $ ClientState peer meta bit_field requestable_pieces chunks handles mvar listenPort sharedMessages
+  dp <- atomically $ DP.new numPieces
+  return $ ClientState peer meta bit_field requestable_pieces dp handles mvar listenPort sharedMessages
 
 openHandles :: FilePath -> MetaInfo -> IO (Seq (Word64, Word64, Handle))
 openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
@@ -75,7 +79,7 @@ openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops
 -- with them.
-btListen :: ClientState -> IO (Async ())
+btListen :: ClientState 'Production -> IO (Async ())
 btListen state = do
   sock <- socket AF_INET Stream defaultProtocol
   setSocketOption sock ReuseAddr 1
@@ -83,9 +87,10 @@ btListen state = do
   listen sock 1
   async $ forever $ do
     (sock', addr) <- accept sock
+    putStrLn "peer connected"
     forkIO $ startFromPeerHandshake state sock' addr
 
-startFromPeerHandshake :: ClientState -> Socket -> SockAddr -> IO ()
+startFromPeerHandshake :: ClientState 'Production -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake state sock addr = do
   handle <- socketToHandle sock ReadWriteMode
   handshake <- readHandshake handle
@@ -114,11 +119,11 @@ startFromPeerHandshake state sock addr = do
         else hClose handle
     _ -> hClose handle
 
-pieceCount :: ClientState -> Word32
+pieceCount :: ClientState 'Production -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
 
 -- | Reach out to peer located at the address and enter the peer loop.
-reachOutToPeer :: ClientState -> SockAddr -> IO ()
+reachOutToPeer :: ClientState 'Production -> SockAddr -> IO ()
 reachOutToPeer state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
@@ -138,7 +143,7 @@ reachOutToPeer state addr = do
         pure ()
     Nothing -> hClose handle
 
-writeHandshake :: Handle -> ClientState -> IO ()
+writeHandshake :: Handle -> ClientState 'Production -> IO ()
 writeHandshake handle state = BL.hPut handle handshake
   where handshake = encode $ BHandshake (infoHash . metaInfo $ state) (myPeerId state)
 {-# INLINABLE writeHandshake #-}
@@ -151,12 +156,12 @@ readHandshake handle = do
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: ClientState -> PeerData -> Handle -> IO (Either PeerError ())
+mainPeerLoop :: ClientState 'Production -> PeerData -> Handle -> IO (Either PeerError ())
 mainPeerLoop state pData handle =
   runPeerMonad state pData handle entryPoint
 
 -- | Ask the tracker for peers and return the result addresses.
-queryTracker :: ClientState -> IO [SockAddr]
+queryTracker :: ClientState 'Production -> IO [SockAddr]
 queryTracker state = do
   let meta = metaInfo state
       url = fromByteString (announce meta) >>= parseUrl

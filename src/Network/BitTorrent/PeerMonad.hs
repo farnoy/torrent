@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -110,7 +113,7 @@ data PeerError = ConnectionLost
 instance Exception PeerError
 
 -- TODO Logger
-type PeerMonadIO = ExceptT PeerError (ReaderT ClientState (StateT PeerState (LoggingT IO)))
+type PeerMonadIO = ExceptT PeerError (ReaderT (ClientState 'Production) (StateT PeerState (LoggingT IO)))
 
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
@@ -265,7 +268,7 @@ log exp = do
 -- It forwards 'SharedMessage's and 'PWP' messages to the 'PeerMonad' to act upon.
 --
 -- Nested 'MemoryMonad' expressions are evaluated using STM.
-runPeerMonad :: ClientState
+runPeerMonad :: ClientState 'Production
              -> PeerData
              -> Handle -- ^ socket handle to communicate with the peer
              -> F PeerMonad a -- ^ PeerMonad expression to evaluate
@@ -295,13 +298,13 @@ runPeerMonad state pData outHandle t = do
             Right (rest, _, msg) -> msg : messageStream rest
 
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
-evalPeerMonadIO (RunMemory a next) = do
+evalPeerMonadIO (RunMemory a next) = {-# SCC "runMemory" #-} do
   state <- ask
   res <- liftIO $ atomically $ runMemoryMonadSTM state a
   next res
-evalPeerMonadIO (GetPeerData next) =
+evalPeerMonadIO (GetPeerData next) ={-# SCC "getPeerData" #-}
   get >>= next . peerStateData
-evalPeerMonadIO (Emit pwp next) = do
+evalPeerMonadIO (Emit pwp next) = {-# SCC "emit" #-} do
   state <- get
   let handle = peerStateHandle state
 
@@ -317,19 +320,19 @@ evalPeerMonadIO (Emit pwp next) = do
 evalPeerMonadIO (GetMeta next) = do
   meta <- metaInfo <$> ask
   next meta
-evalPeerMonadIO (ReadData o l next) = do
+evalPeerMonadIO (ReadData o l next) = {-# SCC "readData" #-} do
   state <- ask
   let hdls = outputHandles state
       lock = outputLock state
   a <- liftIO $ FW.read hdls lock o l
   next a
-evalPeerMonadIO (WriteData o d next) = do
+evalPeerMonadIO (WriteData o d next) = {-# SCC "writeData" #-} do
   state <- ask
   let hdls = outputHandles state
       lock = outputLock state
   liftIO $ FW.write hdls lock o d
   next
-evalPeerMonadIO (UpdatePeerData !pData next) = do
+evalPeerMonadIO (UpdatePeerData !pData next) = {-# SCC "updatePeerData" #-} do
   pState <- get
   put $ pState { peerStateData = pData }
   next
@@ -337,7 +340,7 @@ evalPeerMonadIO (GetPeerEvent next) = do
   pState <- get
   msg <- liftIO $ readChan $ peerStateChan pState
   next msg
-evalPeerMonadIO (RegisterActiveChunk pieceId chunkId next) = do
+evalPeerMonadIO (RegisterActiveChunk pieceId chunkId next) = {-# SCC "registerActiveChunk" #-} do
   pState <- get
 
   t <- liftIO getCurrentTime
@@ -346,7 +349,7 @@ evalPeerMonadIO (RegisterActiveChunk pieceId chunkId next) = do
                             t
                             (peerStateActiveChunks pState) }
   next
-evalPeerMonadIO (DeregisterActiveChunk pieceId chunkId next) = do
+evalPeerMonadIO (DeregisterActiveChunk pieceId chunkId next) = {-# SCC "deregisterActiveChunk" #-} do
   pState <- get
   let activeChunks = peerStateActiveChunks pState
 
@@ -371,15 +374,14 @@ receiveChunk piece offset d = do
   let chunkIndex = ChunkId (divideSize offset defaultChunkSize)
 
   wasMarked <- runMemory $ {-# SCC "receiveChunk--memory" #-} do
-    chunks <- getChunks
-    case Map.lookup piece chunks of
+    dp <- getDownloadProgress piece
+    case dp of
       Just chunkField -> do
         let chunkField' = CF.markCompleted chunkField chunkIndex
-        modifyChunks $ Map.insert piece (force chunkField')
+        setDownloadProgress piece (force chunkField')
         return True
       _ -> return False -- someone already filled this
 
-  log $ \peerid -> logDebugN $ "Finished " <> peerid <> " " <> T.pack (show (piece, chunkIndex))
   deregisterActiveChunk piece chunkIndex
   pData <- getPeerData
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
@@ -402,23 +404,25 @@ processPiece piece@(PieceId pieceId) = do
       totalSize = sum (Meta.length <$> Meta.files infoDict)
       pieceSize = expectedPieceSize totalSize defaultPieceLen piece
 
-  isCompleted <- runMemory $ do
-    cf <- fmap (Map.lookup piece) getChunks
-    return $ fmap CF.isCompleted cf
+  isCompleted <- runMemory (fmap (fmap CF.isCompleted) (getDownloadProgress piece))
 
   when (isCompleted == Just True) $ do
     d <- readData (fromIntegral pieceId * fromIntegral defaultPieceLen) (fromIntegral pieceSize)
 
     dataToWrite <- runMemory $ do
-      chunks <-  getChunks
-      case Map.lookup piece chunks of
+      dp <- getDownloadProgress piece
+      case dp of
         Just chunkField -> do
           let getPieceHash (PieceId n) =
                 B.take 20 $ B.drop (fromIntegral n * 20) $ pieces infoDict
 
+          if CF.isRequested chunkField
+            then {-# SCC "modifyRequestablePieces" #-} modifyRequestablePieces (IntSet.delete $ fromIntegral pieceId)
+            else return ()
+
           case CF.isCompleted chunkField of
             True -> {-# SCC "processPiece--onComplete" #-} do
-              {-# SCC "modifyChunks" #-} modifyChunks $ Map.delete piece
+              {-# SCC "removeDownloadProgress" #-} removeDownloadProgress piece
               if ({-# SCC "hash-data" #-} hash d) == getPieceHash piece
                 then do
                   bitfield <- getBitfield
@@ -428,9 +432,10 @@ processPiece piece@(PieceId pieceId) = do
                   {-# SCC "modifyAvailability" #-} modifyAvailability (PS.addToAvailability newBitfield .
                                       PS.removeFromAvailability bitfield)
                   -}
-                  {-# SCC "modifyRequestablePieces" #-} modifyRequestablePieces (`IntSet.difference` IntSet.singleton (fromIntegral pieceId))
                   return (Just d)
-                else return $ Just "hashFail" -- we remove it from Chunks
+                else do
+                  modifyRequestablePieces (IntSet.insert $ fromIntegral pieceId)
+                  return $ Just "hashFail" -- we remove it from Chunks
                                     -- but do not modify the bitfield,
                                     -- it will be reacquired again
             False -> return Nothing
@@ -486,7 +491,9 @@ claimChunk totalSize pieceLen chunkField piece@(PieceId pieceId) =
       let request = Request pieceId
                             (chunkId * defaultChunkSize)
                             (nextChunkSize piece chunk)
-      modifyChunks $ Map.insert piece (force chunkField')
+      setDownloadProgress piece (force chunkField')
+      when (CF.isRequested chunkField') $
+        modifyRequestablePieces (IntSet.delete $ fromIntegral pieceId)
       return $ Just $ RequestChunk piece chunk request
     _ -> return Nothing
   where nextChunkSize :: PieceId -> ChunkId -> Word32
@@ -495,36 +502,45 @@ claimChunk totalSize pieceLen chunkField piece@(PieceId pieceId) =
 
 nextRequestOperation :: PeerData -> MetaInfo -> F MemoryMonad (Maybe RequestOperation)
 nextRequestOperation peerData meta = do
-  chunks <- getChunks
-  ourBitField <- getBitfield
   requestablePieces <- getRequestablePieces
 
   let peersBitField = peerBitField peerData
       infoDict = info meta
       defaultPieceLen = pieceLength infoDict
       totalSize = {-# SCC "totalSize" #-} force $ sum (Meta.length <$> Meta.files infoDict)
-      findPiece n | n == (BF.length ourBitField) = Nothing
+      {-
+      findPiece n | n == (BF.length ourBitField) = pure Nothing
       findPiece n = case IntSet.lookupGE (fromIntegral n) requestablePieces of
-        Just k ->
+        Just k -> do
           let piece = PieceId (fromIntegral k)
               next = findPiece (fromIntegral k + 1)
-          in case Map.lookup piece chunks of
-            Nothing -> Just piece
+          dp <- getDownloadProgress piece
+          case dp of
+            Nothing -> pure $ Just piece
             Just chunkField -> case CF.getNextChunk chunkField of
-              Just _ -> Just piece
+              Just _ -> pure $ Just piece
               _ -> next
-        _ -> Nothing
-      nextPiece = findPiece 0
+        _ -> pure Nothing
+      -}
+      findPieceSimple =
+        case IntSet.lookupGE 0 requestablePieces of
+          Just k -> Just $ PieceId $ fromIntegral k
+          _ -> Nothing
+
+      nextPiece = findPieceSimple
+  -- nextPiece <- findPiece 0
 
   case nextPiece of
     Nothing -> return Nothing
     Just piece@(PieceId pieceId) ->
       let pieceLen = expectedPieceSize totalSize defaultPieceLen piece
       in case () of
-        _ | not (BF.get peersBitField pieceId) ->
+        _ | not (BF.get peersBitField pieceId) -> do
+          ourBitField <- getBitfield
           return (Just $ Raise $ AssertionFailed ("Peer does not have it, peer:" ++ show (BF.get peersBitField pieceId) ++ ", us:" ++ show (BF.get ourBitField pieceId)))
-        _ ->
-          case Map.lookup piece chunks of
+        _ -> do
+          dp <- getDownloadProgress piece
+          case dp of
             Nothing -> do
               let chunksCount = chunksInPiece pieceLen defaultChunkSize
                   chunkField = CF.newChunkField (fromIntegral chunksCount)
@@ -542,7 +558,6 @@ requestNextChunk = do
 
       case operation of
         Just (RequestChunk pieceId chunkId pwpRequest) -> do
-          log $ \peerid -> logDebugN $ "Acquiring " <> peerid <> " " <> T.pack (show (pieceId, chunkId))
           registerActiveChunk pieceId chunkId
           let modifiedPeer = peerData { requestsLive = requestsLive peerData + 1 }
           updatePeerData modifiedPeer
@@ -576,21 +591,23 @@ handlePWP _ = return () -- logging?
 
 -- | Marks the chunk as missing and marks as inactive chunk.
 releaseActiveChunk :: PieceId -> ChunkId -> F PeerMonad ()
-releaseActiveChunk pieceId chunkId = do
+releaseActiveChunk piece@(PieceId pieceId) chunkId = do
   activeChunks <- getActiveChunks
 
-  case Map.lookup (pieceId, chunkId) activeChunks of
+  case Map.lookup (piece, chunkId) activeChunks of
     Just _ ->
-      runMemory $ modifyChunks $ \chunks ->
-        case Map.lookup pieceId chunks of
+      runMemory $ do
+        dp <- getDownloadProgress piece
+        case dp of
           Just cf ->
             let cf' = CF.markMissing cf chunkId
-            in Map.insert pieceId cf' chunks
-          Nothing -> chunks
+            in do setDownloadProgress piece cf'
+                  modifyRequestablePieces (IntSet.insert $ fromIntegral pieceId)
+          Nothing -> pure ()
     Nothing -> pure ()
 
-  log $ \peerid -> logDebugN $ "Releasing " <> peerid <> " " <> T.pack (show (pieceId, chunkId))
-  deregisterActiveChunk pieceId chunkId
+  log $ \peerid -> logDebugN $ "Releasing " <> peerid <> " " <> T.pack (show (piece, chunkId))
+  deregisterActiveChunk piece chunkId
 
 -- | Runs the peer loop, processing all events.
 entryPoint :: F PeerMonad ()

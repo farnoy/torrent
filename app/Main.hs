@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DataKinds #-}
+
 module Main where
 
 import Control.Concurrent
@@ -14,6 +16,7 @@ import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.Types
+import Network.BitTorrent.Utility
 import System.Environment
 import System.IO
 import System.Posix.Signals
@@ -42,7 +45,7 @@ main = do
       return ()
     Nothing -> Prelude.putStrLn "no files provided"
 
-cleanup :: ClientState -> [Async a] -> Async b -> IO ()
+cleanup :: ClientState 'Production -> [Async a] -> Async b -> IO ()
 cleanup state promises listener = do
   writeChan (sharedMessages state) Exit
   cancel listener
@@ -61,19 +64,19 @@ waitOnPeers promises = do
     Right _ -> putStrLn "success & quit"
   waitOnPeers (filter (/= finished) promises)
 
-progressLogger :: ClientState -> IO ()
+progressLogger :: ClientState 'Production -> IO ()
 progressLogger state = forever $ do
   bf <- atomically $ readTVar $ bitField state
   print bf
   threadDelay 5000000
 
-sharedMessagesLogger :: ClientState -> IO ()
+sharedMessagesLogger :: ClientState 'Production -> IO ()
 sharedMessagesLogger state =
   forever $ readChan (sharedMessages state) >>= print
 
-periodicCheckup :: ClientState -> IO ()
+periodicCheckup :: ClientState 'Production -> IO ()
 periodicCheckup state = forever $ do
   threadDelay 1000000
   writeChan (sharedMessages state) Checkup
-  chunks <- atomically (readTVar (pieceChunks state))
-  print (CF.requestedChunks <$> chunks)
+  -- chunks <- atomically (readTVar (pieceChunks state))
+  --print (CF.requestedChunks <$> chunks)

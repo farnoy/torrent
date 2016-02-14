@@ -1,4 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE KindSignatures #-}
 
 -- | Exports useful types for other modules.
 module Network.BitTorrent.Types (
@@ -26,6 +28,7 @@ import Data.Sequence (Seq)
 -- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
+import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.MetaInfo as Meta
 -- import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Utility
@@ -34,7 +37,7 @@ import System.IO
 
 -- | Describes the limit of requests in flight to a single peer.
 maxRequestsPerPeer :: Word8
-maxRequestsPerPeer = 8
+maxRequestsPerPeer = 64
 
 -- | Stores information about a peer.
 data PeerData = PeerData {
@@ -51,12 +54,12 @@ data PeerData = PeerData {
 
 -- | Stores information about the client application.
 -- Holds references to shared memory peer loops use to coordinate work.
-data ClientState = ClientState {
+data ClientState (t :: ClassToken) = ClientState {
   myPeerId :: ByteString
 , metaInfo :: MetaInfo
 , bitField :: TVar BitField
 , requestablePieces :: TVar IntSet
-, pieceChunks :: TVar Chunks
+, clientStateDownloadProgress :: DP.Backend t
 , outputHandles :: Seq (Word64, Word64, Handle)
 , outputLock :: MVar ()
 , ourPort :: Word16

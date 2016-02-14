@@ -19,7 +19,7 @@ read :: Seq (Word64, Word64, Handle)
      -> Word64  -- ^ offset in bytes
      -> Word64  -- ^ number of bytes to read
      -> IO ByteString
-read hdls mvar offset size = withMVar mvar (const go)
+read hdls mvar offset size = {-# SCC "FW.read" #-} withMVar mvar (const go)
   where go = traverse read overlapping >>= return . fold
         read :: (Word64, Word64, Word64, Handle) -> IO ByteString
         read (base, lo, hi, hdl) = do
@@ -35,15 +35,15 @@ write :: Seq (Word64, Word64, Handle)
       -> Word64     -- ^ offset in bytes
       -> ByteString -- ^ data to write
       -> IO ()
-write hdls mvar offset block = withMVar mvar (const go)
-  where go = traverse_ write overlapping
+write hdls mvar offset block = {-# SCC "FW.write" #-} withMVar mvar (const go)
+  where go = {-# SCC "go" #-} traverse_ write overlapping
         write :: (Word64, Word64, Word64, Handle) -> IO ()
         write (base, lo, hi, hdl) = do
-          hSeek hdl AbsoluteSeek (fromIntegral $ lo - base)
-          B.hPut hdl
+          {-# SCC "hSeek" #-} hSeek hdl AbsoluteSeek (fromIntegral $ lo - base)
+          {-# SCC "hPut" #-} B.hPut hdl
             $ B.take (min (fromIntegral $ hi - lo) (B.length block))
             $ B.drop (fromIntegral $ lo - offset)
               block
-        overlapping = fileOverlap addedBase offset (offset + fromIntegral (B.length block))
+        overlapping = {-# SCC "overlapping" #-} fileOverlap addedBase offset (offset + fromIntegral (B.length block))
         addedBase = (\(lo, hi, hdl) -> (lo, lo, hi, hdl)) <$> hdls
 {-# INLINABLE write #-}
