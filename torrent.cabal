@@ -29,7 +29,7 @@ library
                    , Network.BitTorrent.PWP
                    , Network.BitTorrent.Types
                    , Network.BitTorrent.Utility
-  ghc-options:   -Wall -O2 -fprof-auto -caf-all -fno-warn-name-shadowing
+  ghc-options:   -Wall -Werror -O2 -fprof-auto -caf-all -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
                  , async
                  , attoparsec
@@ -64,7 +64,7 @@ library
 executable torrent
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -Wall -O2 -fprof-auto -fno-warn-name-shadowing
+  ghc-options:         -threaded -rtsopts -Wall -Werror -O2 -fprof-auto -fno-warn-name-shadowing
   build-depends:       base
                      , attoparsec
                      , async
@@ -72,6 +72,7 @@ executable torrent
                      , base64-bytestring
                      , bytestring
                      , bytestring-conversion
+                     , containers
                      , cryptohash
                      , http-client
                      , http-types

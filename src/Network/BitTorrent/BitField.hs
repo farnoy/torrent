@@ -21,7 +21,6 @@ import qualified Data.ByteString as B
 import Data.Monoid
 import Data.Word
 import GHC.Generics (Generic)
-import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 

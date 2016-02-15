@@ -7,7 +7,8 @@ module Network.BitTorrent.Types (
   maxRequestsPerPeer
 , PeerData(..)
 , newPeer
-, ClientState(..)
+, TorrentState(..)
+, GlobalState(..)
 , SharedMessage(..)
 , Chunks
 , defaultChunkSize
@@ -52,6 +53,23 @@ data PeerData = PeerData {
 , peerDataStopping :: !Bool
 } deriving(Eq, Show)
 
+data GlobalState = GlobalState {
+  globalStatePeerId     :: ByteString
+, globalStateListenPort :: Word16
+, globalStateTorrents   :: TVar (Seq (TorrentState 'Production))
+}
+
+data TorrentState (t :: ClassToken) = TorrentState {
+  torrentStateMetaInfo          :: MetaInfo
+, torrentStateBitField          :: TVar BitField
+, torrentStateRequestablePieces :: TVar IntSet
+, torrentStateDownloadProgress  :: DP.Backend t
+, torrentStateOutputHandles     :: Seq (Word64, Word64, Handle)
+, torrentStateOutputLock        :: MVar ()
+, torrentStateSharedMessages    :: Chan SharedMessage
+}
+
+{-
 -- | Stores information about the client application.
 -- Holds references to shared memory peer loops use to coordinate work.
 data ClientState (t :: ClassToken) = ClientState {
@@ -66,6 +84,8 @@ data ClientState (t :: ClassToken) = ClientState {
 -- , availabilityData :: TVar PS.AvailabilityData
 , sharedMessages :: Chan SharedMessage
 }
+
+-}
 
 -- | Create a new 'PeerData' structure.
 newPeer :: BitField -> SockAddr -> ByteString -> PeerData

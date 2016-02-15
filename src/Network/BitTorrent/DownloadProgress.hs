@@ -15,14 +15,14 @@ module Network.BitTorrent.DownloadProgress (
 , ProgressStorage(..)
 ) where
 
-import qualified Control.Concurrent.STM.Map as TT
+-- import qualified Control.Concurrent.STM.Map as TT
 import Control.Concurrent.STM.TVar
-import qualified STMContainers.Map as STMap
-import Control.Monad.Identity
+-- import qualified STMContainers.Map as STMap
+-- import Control.Monad.Identity
 import Control.Monad.STM
-import qualified Data.Map.Strict as Map
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
+-- import qualified Data.Map.Strict as Map
+-- import Data.Map.Strict (Map)
+-- import qualified Data.Map.Strict as Map
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import Data.Word

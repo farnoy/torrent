@@ -11,8 +11,8 @@ import Control.Monad
 import qualified Data.Attoparsec.ByteString.Lazy as AL
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
+import Data.Maybe (catMaybes)
 import Network.BitTorrent.Bencoding
-import Network.BitTorrent.ChunkField as CF
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import Network.BitTorrent.Types
@@ -29,30 +29,36 @@ openTorrentFile filename = do
 main :: IO ()
 main = do
   args <- getArgs
-  res <- openTorrentFile $ head args
-  case res of
-    Just meta -> do
-      clientState <- newClientState "." meta globalPort
-      listener <- btListen clientState
-      peers <- queryTracker clientState
-      promises <- traverse (async . reachOutToPeer clientState) peers
-      -- dont do this here in the future
-      void $ forkIO $ progressLogger clientState
-      void $ forkIO $ sharedMessagesLogger clientState
-      void $ forkIO $ periodicCheckup clientState
-      void $ installHandler sigINT (CatchOnce (cleanup clientState promises listener)) Nothing
-      waitOnPeers promises
-      return ()
-    Nothing -> Prelude.putStrLn "no files provided"
+  print args
+  globalState <- newGlobalState
+  torrents <- traverse openTorrentFile args
+  print torrents
+  listener <- btListen globalState
+  promises <- traverse (runTorrent globalState) (catMaybes torrents)
+  void $ installHandler sigINT (CatchOnce (cleanup globalState listener promises)) Nothing
+  traverse_ wait promises
 
-cleanup :: ClientState 'Production -> [Async a] -> Async b -> IO ()
-cleanup state promises listener = do
-  writeChan (sharedMessages state) Exit
+runTorrent :: GlobalState -> MetaInfo -> IO (Async ())
+runTorrent globalState meta = async $ do
+  torrentState <- newTorrentState "." meta
+  addActiveTorrent globalState torrentState
+  peers <- queryTracker globalState torrentState
+  promises <- traverse (async . reachOutToPeer globalState torrentState) peers
+  void $ forkIO $ progressLogger torrentState
+  void $ forkIO $ sharedMessagesLogger torrentState
+  void $ forkIO $ periodicCheckup torrentState
+  waitOnPeers promises
+  return ()
+
+cleanup :: GlobalState -> Async a -> [Async b]-> IO ()
+cleanup globalState listener promises = do
   cancel listener
+  torrents <- atomically $ readTVar $ globalStateTorrents globalState
+  traverse_ (\state -> do writeChan (torrentStateSharedMessages state) Exit) torrents
   putStrLn "waiting 5 seconds to kill all"
   threadDelay 5000000
+  traverse_ (traverse_ (\(_, _, h) -> hClose h)) (torrentStateOutputHandles <$> torrents)
   traverse_ cancel promises
-  traverse_ (\(_, _, handle) -> hClose handle) (outputHandles state)
 
 waitOnPeers :: [Async a] -> IO ()
 waitOnPeers [] = return ()
@@ -64,19 +70,19 @@ waitOnPeers promises = do
     Right _ -> putStrLn "success & quit"
   waitOnPeers (filter (/= finished) promises)
 
-progressLogger :: ClientState 'Production -> IO ()
+progressLogger :: TorrentState 'Production -> IO ()
 progressLogger state = forever $ do
-  bf <- atomically $ readTVar $ bitField state
+  bf <- atomically $ readTVar $ torrentStateBitField state
   print bf
   threadDelay 5000000
 
-sharedMessagesLogger :: ClientState 'Production -> IO ()
+sharedMessagesLogger :: TorrentState 'Production -> IO ()
 sharedMessagesLogger state =
-  forever $ readChan (sharedMessages state) >>= print
+  forever $ readChan (torrentStateSharedMessages state) >>= print
 
-periodicCheckup :: ClientState 'Production -> IO ()
+periodicCheckup :: TorrentState 'Production -> IO ()
 periodicCheckup state = forever $ do
   threadDelay 1000000
-  writeChan (sharedMessages state) Checkup
+  writeChan (torrentStateSharedMessages state) Checkup
   -- chunks <- atomically (readTVar (pieceChunks state))
   --print (CF.requestedChunks <$> chunks)

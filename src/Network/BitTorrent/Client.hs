@@ -4,7 +4,9 @@
 -- | Implements most of the connection handling
 -- and initiates peer loops.
 module Network.BitTorrent.Client (
-  newClientState
+  newGlobalState
+, newTorrentState
+, addActiveTorrent
 , newPeer
 , btListen
 , globalPort
@@ -25,14 +27,13 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
+import Data.Foldable (find)
 import qualified Data.IntSet as IntSet
-import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
-import Data.UUID hiding (fromByteString)
+import Data.UUID (toASCIIBytes)
 import Data.UUID.V4
--- import Hexdump
 import Lens.Family2
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
@@ -51,14 +52,18 @@ import System.IO
 globalPort :: Word16
 globalPort = 8035
 
--- | Create a 'ClientState'.
-newClientState :: FilePath -- ^ Output directory for downloaded files
-               -> MetaInfo
-               -> Word16 -- ^ Listen port
-               -> IO (ClientState 'Production)
-newClientState dir meta listenPort = do
+newGlobalState :: IO GlobalState
+newGlobalState = do
   uuid <- nextRandom
-  let peer = hash $ toASCIIBytes uuid
+  let peerId = hash $ toASCIIBytes uuid
+  torrents <- newTVarIO Seq.empty
+  return $ GlobalState peerId globalPort torrents
+
+-- | Create a 'TorrentState'.
+newTorrentState :: FilePath -- ^ Output directory for downloaded files
+               -> MetaInfo
+               -> IO (TorrentState 'Production)
+newTorrentState dir meta = do
   let numPieces :: Integral a => a
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
   requestable_pieces <- newTVarIO $ IntSet.fromList [0..(numPieces-1)]
@@ -67,7 +72,11 @@ newClientState dir meta listenPort = do
   mvar <- newMVar ()
   sharedMessages <- newChan
   dp <- atomically $ DP.new numPieces
-  return $ ClientState peer meta bit_field requestable_pieces dp handles mvar listenPort sharedMessages
+  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages
+
+addActiveTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+addActiveTorrent global local =
+  atomically $ modifyTVar' (globalStateTorrents global) (Seq.|> local)
 
 openHandles :: FilePath -> MetaInfo -> IO (Seq (Word64, Word64, Handle))
 openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
@@ -79,62 +88,56 @@ openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops
 -- with them.
-btListen :: ClientState 'Production -> IO (Async ())
-btListen state = do
+btListen :: GlobalState -> IO (Async ())
+btListen globalState = do
   sock <- socket AF_INET Stream defaultProtocol
   setSocketOption sock ReuseAddr 1
-  bind sock (SockAddrInet (fromIntegral $ ourPort state) 0)
+  bind sock (SockAddrInet (fromIntegral $ globalStateListenPort globalState) 0)
   listen sock 1
   async $ forever $ do
     (sock', addr) <- accept sock
     putStrLn "peer connected"
-    forkIO $ startFromPeerHandshake state sock' addr
+    forkIO $ startFromPeerHandshake globalState sock' addr
 
-startFromPeerHandshake :: ClientState 'Production -> Socket -> SockAddr -> IO ()
-startFromPeerHandshake state sock addr = do
+startFromPeerHandshake :: GlobalState -> Socket -> SockAddr -> IO ()
+startFromPeerHandshake globalState sock addr = do
   handle <- socketToHandle sock ReadWriteMode
   handshake <- readHandshake handle
 
   case handshake of
     Just (BHandshake hisInfoHash peer) -> do
-      let ourInfoHash = infoHash $ metaInfo state
-          cond = hisInfoHash == ourInfoHash
-          -- && Map.notMember peer ourPeers -- for later
-          bf = BF.newBitField (pieceCount state)
+      ourTorrentState <- atomically $ do
+        torrents <- readTVar (globalStateTorrents globalState)
+        return $ find ((==hisInfoHash) . infoHash . torrentStateMetaInfo) torrents
 
-      if cond
-        then do
-          writeHandshake handle state
-          let pData = newPeer bf addr peer
+      case ourTorrentState of
+        Just torrent -> do
+          writeHandshake handle globalState torrent
 
-          {-
-          bf <- atomically $
-            readTVar (bitField state)
+          let bf = BF.newBitField (pieceCount torrent)
+              pData = newPeer bf addr peer
 
-          BL.hPut handle (encode $ BF.toPWP bf)
-          -}
-
-          mainPeerLoop state pData handle
+          mainPeerLoop torrent pData handle
           pure ()
-        else hClose handle
-    _ -> hClose handle
+        Nothing ->  hClose handle
+    Nothing -> hClose handle
 
-pieceCount :: ClientState 'Production -> Word32
-pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo
+pieceCount :: TorrentState 'Production -> Word32
+pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo
 
 -- | Reach out to peer located at the address and enter the peer loop.
-reachOutToPeer :: ClientState 'Production -> SockAddr -> IO ()
-reachOutToPeer state addr = do
+reachOutToPeer :: GlobalState -> TorrentState 'Production -> SockAddr -> IO ()
+reachOutToPeer globalState state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
   handle <- socketToHandle sock ReadWriteMode
 
-  writeHandshake handle state
+  writeHandshake handle globalState state
   handshake <- readHandshake handle
 
   case handshake of
     Just (BHandshake hisInfoHash hisId) -> do
-      let ourInfoHash = infoHash $ metaInfo state
+      let ourInfoHash = infoHash $ torrentStateMetaInfo state
           bitField = BF.newBitField (pieceCount state)
 
       when (hisInfoHash == ourInfoHash) $ do
@@ -143,9 +146,9 @@ reachOutToPeer state addr = do
         pure ()
     Nothing -> hClose handle
 
-writeHandshake :: Handle -> ClientState 'Production -> IO ()
-writeHandshake handle state = BL.hPut handle handshake
-  where handshake = encode $ BHandshake (infoHash . metaInfo $ state) (myPeerId state)
+writeHandshake :: Handle -> GlobalState -> TorrentState 'Production -> IO ()
+writeHandshake handle globalState state = BL.hPut handle handshake
+  where handshake = encode $ BHandshake (infoHash . torrentStateMetaInfo $ state) (globalStatePeerId globalState)
 {-# INLINABLE writeHandshake #-}
 
 readHandshake :: Handle -> IO (Maybe BHandshake)
@@ -156,16 +159,16 @@ readHandshake handle = do
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: ClientState 'Production -> PeerData -> Handle -> IO (Either PeerError ())
+mainPeerLoop :: TorrentState 'Production -> PeerData -> Handle -> IO (Either PeerError ())
 mainPeerLoop state pData handle =
   runPeerMonad state pData handle entryPoint
 
 -- | Ask the tracker for peers and return the result addresses.
-queryTracker :: ClientState 'Production -> IO [SockAddr]
-queryTracker state = do
-  let meta = metaInfo state
+queryTracker :: GlobalState -> TorrentState 'Production -> IO [SockAddr]
+queryTracker globalState state = do
+  let meta = torrentStateMetaInfo state
       url = fromByteString (announce meta) >>= parseUrl
-      req = setQueryString [ ("peer_id", Just (myPeerId state))
+      req = setQueryString [ ("peer_id", Just (globalStatePeerId globalState))
                            , ("info_hash", Just (infoHash meta))
                            , ("compact", Just "1")
                            , ("port", Just (BC.pack $ show globalPort))

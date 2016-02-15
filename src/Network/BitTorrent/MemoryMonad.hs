@@ -106,38 +106,30 @@ modifyRequestablePieces :: (IntSet -> IntSet) -> F MemoryMonad ()
 modifyRequestablePieces mut = liftF $ ModifyRequestablePieces mut ()
 {-# INLINABLE modifyRequestablePieces #-}
 
-evalMemoryMonad :: ClientState 'Production -> MemoryMonad (STM a) -> STM a
+evalMemoryMonad :: TorrentState 'Production -> MemoryMonad (STM a) -> STM a
 evalMemoryMonad state (GetDownloadProgress piece next) = do
-  cf <- DP.lookup piece (clientStateDownloadProgress state)
+  cf <- DP.lookup piece (torrentStateDownloadProgress state)
   next cf
 evalMemoryMonad state (SetDownloadProgress piece cf next) = do
-  DP.insert piece cf (clientStateDownloadProgress state)
+  DP.insert piece cf (torrentStateDownloadProgress state)
   next
 evalMemoryMonad state (RemoveDownloadProgress piece next) = do
-  DP.delete piece (clientStateDownloadProgress state)
+  DP.delete piece (torrentStateDownloadProgress state)
   next
 evalMemoryMonad state (ReadBitfield next) = do
-  res <- readTVar (bitField state)
+  res <- readTVar (torrentStateBitField state)
   next res
 evalMemoryMonad state (ModifyBitfield mut next) = do
-  modifyTVar' (bitField state) (force . mut)
+  modifyTVar' (torrentStateBitField state) (force . mut)
   next
-{-
-evalMemoryMonad state (ReadAvailability next) = do
-  res <- readTVar (availabilityData state)
-  next res
-evalMemoryMonad state (ModifyAvailability mut next) = do
-  modifyTVar' (availabilityData state) (force . mut)
-  next
--}
 evalMemoryMonad state (ReadRequestablePieces next) = do
-  res <- readTVar (requestablePieces state)
+  res <- readTVar (torrentStateRequestablePieces state)
   next res
 evalMemoryMonad state (ModifyRequestablePieces mut next) = do
-  modifyTVar' (requestablePieces state) (force . mut)
+  modifyTVar' (torrentStateRequestablePieces state) (force . mut)
   next
 
 -- | Runs the whole transaction atomically under STM.
-runMemoryMonadSTM :: ClientState 'Production -> F MemoryMonad a -> STM a
+runMemoryMonadSTM :: TorrentState 'Production -> F MemoryMonad a -> STM a
 runMemoryMonadSTM state m = iterM (evalMemoryMonad state) m `orElse` tracker
   where tracker = unsafeIOToSTM (putStrLn "RETRIED" *> traceMarkerIO "retry") *> retry

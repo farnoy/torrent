@@ -113,7 +113,7 @@ data PeerError = ConnectionLost
 instance Exception PeerError
 
 -- TODO Logger
-type PeerMonadIO = ExceptT PeerError (ReaderT (ClientState 'Production) (StateT PeerState (LoggingT IO)))
+type PeerMonadIO = ExceptT PeerError (ReaderT (TorrentState 'Production) (StateT PeerState (LoggingT IO)))
 
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
@@ -268,14 +268,14 @@ log exp = do
 -- It forwards 'SharedMessage's and 'PWP' messages to the 'PeerMonad' to act upon.
 --
 -- Nested 'MemoryMonad' expressions are evaluated using STM.
-runPeerMonad :: ClientState 'Production
+runPeerMonad :: TorrentState 'Production
              -> PeerData
              -> Handle -- ^ socket handle to communicate with the peer
              -> F PeerMonad a -- ^ PeerMonad expression to evaluate
              -> IO (Either PeerError a)
 runPeerMonad state pData outHandle t = do
   privateChan <- newChan
-  sharedChan <- dupChan (sharedMessages state)
+  sharedChan <- dupChan (torrentStateSharedMessages state)
 
   let peerState = PeerState pData privateChan outHandle Map.empty
 
@@ -318,18 +318,18 @@ evalPeerMonadIO (Emit pwp next) = {-# SCC "emit" #-} do
 
   next
 evalPeerMonadIO (GetMeta next) = do
-  meta <- metaInfo <$> ask
+  meta <- torrentStateMetaInfo <$> ask
   next meta
 evalPeerMonadIO (ReadData o l next) = {-# SCC "readData" #-} do
   state <- ask
-  let hdls = outputHandles state
-      lock = outputLock state
+  let hdls = torrentStateOutputHandles state
+      lock = torrentStateOutputLock state
   a <- liftIO $ FW.read hdls lock o l
   next a
 evalPeerMonadIO (WriteData o d next) = {-# SCC "writeData" #-} do
   state <- ask
-  let hdls = outputHandles state
-      lock = outputLock state
+  let hdls = torrentStateOutputHandles state
+      lock = torrentStateOutputLock state
   liftIO $ FW.write hdls lock o d
   next
 evalPeerMonadIO (UpdatePeerData !pData next) = {-# SCC "updatePeerData" #-} do
