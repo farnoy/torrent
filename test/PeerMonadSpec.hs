@@ -50,22 +50,22 @@ data Memory = Memory { memoryBitField :: BF.BitField
                      , memoryRequestablePieces :: IntSet
                      }
 
-class ClientStateDumper t where
-  clientStateToMemory :: ClientState t -> IO Memory
+class TorrentStateDumper t where
+  clientStateToMemory :: TorrentState t -> IO Memory
 
-instance ClientStateDumper 'Production where
+instance TorrentStateDumper 'Production where
   clientStateToMemory state = atomically (Memory
-                                             <$> readTVar (bitField state)
+                                             <$> readTVar (torrentStateBitField state)
                                              <*> readPieceChunks state
                                              -- <*> readTVar (availabilityData state)
-                                             <*> readTVar (requestablePieces state))
+                                             <*> readTVar (torrentStateRequestablePieces state))
 
-    where readPieceChunks :: ClientState 'Production -> STM Chunks
+    where readPieceChunks :: TorrentState 'Production -> STM Chunks
           readPieceChunks state =
             fmap (Map.fromList . convert) (traverse lookup' [PieceId k | k <- [0..(pieceCount - 1)]])
-            where pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . metaInfo $ state
+            where pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo $ state
                   lookup' :: PieceId -> STM (Maybe (PieceId, CF.ChunkField))
-                  lookup' k = fmap (fmap (k,)) (DP.lookup k (clientStateDownloadProgress state))
+                  lookup' k = fmap (fmap (k,)) (DP.lookup k (torrentStateDownloadProgress state))
                   convert :: [Maybe (PieceId, CF.ChunkField)] -> [(PieceId, CF.ChunkField)]
                   convert = foldl f []
                   f accu (Just assoc) = assoc : accu
@@ -116,9 +116,9 @@ data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateCurrentTime :: UTCTime
                            }
 
-type PeerMonadTest t = CatchT (ReaderT (ClientState t) (StateT PeerState Identity))
+type PeerMonadTest t = CatchT (ReaderT (TorrentState t) (StateT PeerState Identity))
 
-runPeerMonadTest :: ClientState t
+runPeerMonadTest :: TorrentState t
                  -> PeerData
                  -> Memory
                  -> [PeerEvent]
@@ -150,7 +150,7 @@ evalPeerMonadTest (Emit msg next) = do
   pState@(PeerState _ outputs _ _ _ _) <- get
   put $ pState { peerStateOutputs = msg : outputs }
   next
-evalPeerMonadTest (GetMeta next) = metaInfo <$> ask >>= next
+evalPeerMonadTest (GetMeta next) = torrentStateMetaInfo <$> ask >>= next
 evalPeerMonadTest (UpdatePeerData pData next) = do
   pState <- get
   put $ pState { peerStateData = pData }
@@ -200,7 +200,7 @@ spec = do
         n <- randomIO :: IO Word16
         let dirName = tmpdir <> "/" <> show n
         createDirectory dirName
-        state <- newClientState dirName testMeta 9999
+        state <- newTorrentState dirName testMeta
         memory <- clientStateToMemory state
         Exception.finally (f (state, memory)) (removeDirectoryRecursive dirName)
 

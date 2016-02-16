@@ -9,7 +9,6 @@ module Network.BitTorrent.Client (
 , addActiveTorrent
 , newPeer
 , btListen
-, globalPort
 , queryTracker
 , reachOutToPeer
 ) where
@@ -49,15 +48,12 @@ import Network.Socket
 import System.FilePath
 import System.IO
 
-globalPort :: Word16
-globalPort = 8035
-
-newGlobalState :: IO GlobalState
-newGlobalState = do
+newGlobalState :: Word16 -> IO GlobalState
+newGlobalState port = do
   uuid <- nextRandom
   let peerId = hash $ toASCIIBytes uuid
   torrents <- newTVarIO Seq.empty
-  return $ GlobalState peerId globalPort torrents
+  return $ GlobalState peerId port torrents
 
 -- | Create a 'TorrentState'.
 newTorrentState :: FilePath -- ^ Output directory for downloaded files
@@ -171,7 +167,7 @@ queryTracker globalState state = do
       req = setQueryString [ ("peer_id", Just (globalStatePeerId globalState))
                            , ("info_hash", Just (infoHash meta))
                            , ("compact", Just "1")
-                           , ("port", Just (BC.pack $ show globalPort))
+                           , ("port", Just (BC.pack $ show $ globalStateListenPort globalState))
                            , ("uploaded", Just "0")
                            , ("downloaded", Just "0")
                            , ("left", Just (BC.pack $ show $ sum (Meta.length <$> Meta.files (info meta))))

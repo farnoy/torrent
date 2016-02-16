@@ -43,8 +43,10 @@ withSetup f = do
         bf = BF.newBitField pieceCount
         peer = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 0) "12345678901234567890"
         peer2 = newPeer bf (testAddr [1, 0, 0, 127] $ ports !! 1) "98765432109876543210"
-    state <- newClientState outDir testMeta (fromIntegral $ ports !! 2)
-    return (peer, peer2, state, testMeta)) (\_ -> do
+    globalState <- newGlobalState (fromIntegral $ ports !! 2)
+    state <- newTorrentState outDir testMeta
+    addActiveTorrent globalState state
+    return (peer, peer2, (globalState, state), testMeta)) (\_ -> do
       removeDirectoryRecursive outDir
     )
     f
@@ -127,12 +129,12 @@ spec = do
     res `shouldBe` Just True
     -}
 
-  it "handshakes properly" $ withSetup $ \(peer, peer2, state, meta) -> do
+  it "handshakes properly" $ withSetup $ \(peer, peer2, (globalState, state), meta) -> do
     promise <- setupSocket peer
             [ WriteHandshake $ BHandshake (infoHash meta) "12345678901234567890"
-            , ReadHandshake $ BHandshake (infoHash meta) $ myPeerId state
+            , ReadHandshake $ BHandshake (infoHash meta) $ globalStatePeerId globalState
             ]
-    forkIO $ reachOutToPeer state (address peer)
+    forkIO $ reachOutToPeer globalState state (address peer)
     result <- wait promise
     result `shouldBe` True
 
@@ -159,8 +161,8 @@ spec = do
 
 
   it "can seed itself" $
-    withSetup $ \(_, _, state, _) -> do
-      withSetup $ \(_, _, state2, _) -> do
+    withSetup $ \(_, _, (globalState, state), _) -> do
+      withSetup $ \(_, _, (globalState2, state2), _) -> do
         bracket (do
           tmpdir <- getTemporaryDirectory
           openTempFile tmpdir "torrent") (\(path, handle) -> do
@@ -168,20 +170,20 @@ spec = do
           removeFile path) (\(path, handle) -> do
           B.hPut handle testData
           atomically $
-            writeTVar (bitField state) fullBitField
+            writeTVar (torrentStateBitField state) fullBitField
 
-          let state' = state { outputHandles = (\(lo, hi, _) -> (lo, hi, handle)) <$> outputHandles state }
-              addr = testAddr [1, 0, 0, 127] $ fromIntegral $ ourPort state'
-          void $ btListen state'
+          let state' = state { torrentStateOutputHandles = (\(lo, hi, _) -> (lo, hi, handle)) <$> torrentStateOutputHandles state }
+              addr = testAddr [1, 0, 0, 127] $ fromIntegral $ globalStateListenPort globalState
+          void $ btListen globalState
 
-          promise <- async $ reachOutToPeer state2 addr
+          promise <- async $ reachOutToPeer globalState2 state2 addr
 
           res <- timeout 1000000 $ atomically $ do
-            bitField <- readTVar (bitField state2)
+            bitField <- readTVar (torrentStateBitField state2)
             if bitField == fullBitField
               then return True
               else retry
-          r <- atomically $ readTVar (bitField state2)
+          r <- atomically $ readTVar (torrentStateBitField state2)
           print r
           print fullBitField
           res `shouldBe` Just True)

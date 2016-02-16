@@ -30,7 +30,7 @@ main :: IO ()
 main = do
   args <- getArgs
   print args
-  globalState <- newGlobalState
+  globalState <- newGlobalState 8035
   torrents <- traverse openTorrentFile args
   print torrents
   listener <- btListen globalState
