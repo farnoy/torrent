@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE BangPatterns #-}
 
 -- | Provides operations for BitFields that are used in the protocol.
 module Network.BitTorrent.BitField (

@@ -20,7 +20,7 @@ read :: Seq (Word64, Word64, Handle)
      -> Word64  -- ^ number of bytes to read
      -> IO ByteString
 read hdls mvar offset size = {-# SCC "FW.read" #-} withMVar mvar (const go)
-  where go = traverse read overlapping >>= return . fold
+  where go = fmap fold (traverse read overlapping)
         read :: (Word64, Word64, Word64, Handle) -> IO ByteString
         read (base, lo, hi, hdl) = do
           hSeek hdl AbsoluteSeek (fromIntegral $ lo - base)

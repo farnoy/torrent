@@ -54,7 +54,7 @@ cleanup :: GlobalState -> Async a -> [Async b]-> IO ()
 cleanup globalState listener promises = do
   cancel listener
   torrents <- atomically $ readTVar $ globalStateTorrents globalState
-  traverse_ (\state -> do writeChan (torrentStateSharedMessages state) Exit) torrents
+  traverse_ (\state -> writeChan (torrentStateSharedMessages state) Exit) torrents
   putStrLn "waiting 5 seconds to kill all"
   threadDelay 5000000
   traverse_ (traverse_ (\(_, _, h) -> hClose h)) (torrentStateOutputHandles <$> torrents)

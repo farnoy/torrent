@@ -6,7 +6,6 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE CPP #-}
 
 -- | Provides (PieceId -> ChunkField) mapping in production and pure flavors.
@@ -53,7 +52,7 @@ instance ProgressStorage 'Production STM where
   data Backend 'Production = ProductionStore (Vector (TVar (Maybe ChunkField)))
   type ReturnValue 'Production = ()
 
-  new count = fmap ProductionStore $ Vector.replicateM (fromIntegral count) (newTVar Nothing)
+  new count = ProductionStore <$> Vector.replicateM (fromIntegral count) (newTVar Nothing)
   lookup (PieceId k) (ProductionStore vec) = readTVar $ (Vector.!) vec (fromIntegral k)
   {-# INLINABLE lookup #-}
   insert (PieceId k) v (ProductionStore vec) = writeTVar ((Vector.!) vec (fromIntegral k)) (Just v)

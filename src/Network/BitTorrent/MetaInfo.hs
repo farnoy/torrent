@@ -48,7 +48,7 @@ parseMetaInfo bv = MetaInfo
                      <$> ((bv ^? bkey "info") >>= parseInfoDictionary)
                      <*> (hash . serialize <$> (bv ^? bkey "info"))
                      <*> bv ^? (bkey "announce" . bstring)
-                     <*> (pure (fromIntegral <$> bv ^? (bkey "creation date" . bnumber)))
+                     <*> pure (fromIntegral <$> bv ^? (bkey "creation date" . bnumber))
 
 parseInfoDictionary :: BValue -> Maybe InfoDictionary
 parseInfoDictionary bv = InfoDictionary

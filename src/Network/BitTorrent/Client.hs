@@ -75,11 +75,12 @@ addActiveTorrent global local =
   atomically $ modifyTVar' (globalStateTorrents global) (Seq.|> local)
 
 openHandles :: FilePath -> MetaInfo -> IO (Seq (Word64, Word64, Handle))
-openHandles dir meta = foldM opener (0, []) (files (info meta)) >>= return . Seq.fromList . reverse . snd
+openHandles dir meta = fmap convert (foldM opener (0, []) (files (info meta)))
   where opener :: (Word64, [(Word64, Word64, Handle)]) -> FileInfo -> IO (Word64, [(Word64, Word64, Handle)])
         opener (offset, list) (FileInfo l n) = do
           hdl <- openFile (dir </> BC.unpack n) ReadWriteMode
           return (offset + l, (offset, offset + l, hdl) : list)
+        convert = Seq.fromList . reverse . snd
 
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops

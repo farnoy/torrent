@@ -312,9 +312,7 @@ evalPeerMonadIO (Emit pwp next) = {-# SCC "emit" #-} do
              (BL.hPut handle (Binary.encode pwp) *> return True)
              (const (return True))
 
-  case res of
-    True -> return ()
-    False -> Except.throwError ConnectionLost
+  unless res $ Except.throwError ConnectionLost
 
   next
 evalPeerMonadIO (GetMeta next) = do
@@ -386,15 +384,13 @@ receiveChunk piece offset d = do
   pData <- getPeerData
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
 
-  if wasMarked
-    then do
-      meta <- getMeta
-      let infoDict = info meta
-          defaultPieceLen = pieceLength infoDict
-          PieceId pix = piece
-      writeData (fromIntegral pix * fromIntegral defaultPieceLen + fromIntegral offset) d
-      processPiece piece
-    else return ()
+  when wasMarked $ do
+    meta <- getMeta
+    let infoDict = info meta
+        defaultPieceLen = pieceLength infoDict
+        PieceId pix = piece
+    writeData (fromIntegral pix * fromIntegral defaultPieceLen + fromIntegral offset) d
+    processPiece piece
 
 processPiece :: PieceId -> F PeerMonad ()
 processPiece piece@(PieceId pieceId) = do
@@ -416,29 +412,25 @@ processPiece piece@(PieceId pieceId) = do
           let getPieceHash (PieceId n) =
                 B.take 20 $ B.drop (fromIntegral n * 20) $ pieces infoDict
 
-          if CF.isRequested chunkField
-            then {-# SCC "modifyRequestablePieces" #-} modifyRequestablePieces (IntSet.delete $ fromIntegral pieceId)
-            else return ()
+          when (CF.isRequested chunkField) $
+            modifyRequestablePieces (IntSet.delete $ fromIntegral pieceId)
 
-          case CF.isCompleted chunkField of
-            True -> {-# SCC "processPiece--onComplete" #-} do
-              {-# SCC "removeDownloadProgress" #-} removeDownloadProgress piece
-              if ({-# SCC "hash-data" #-} hash d) == getPieceHash piece
+          if CF.isCompleted chunkField
+            then do
+              removeDownloadProgress piece
+              if hash d == getPieceHash piece
                 then do
                   bitfield <- getBitfield
-                  let newBitfield = {-# SCC "newBitField" #-} BF.set bitfield pieceId True
-                  {-# SCC "modifyChunks" #-} modifyBitfield (const newBitfield)
-                  {-
-                  {-# SCC "modifyAvailability" #-} modifyAvailability (PS.addToAvailability newBitfield .
-                                      PS.removeFromAvailability bitfield)
-                  -}
+                  let newBitfield = BF.set bitfield pieceId True
+                  modifyBitfield (const newBitfield)
                   return (Just d)
                 else do
                   modifyRequestablePieces (IntSet.insert $ fromIntegral pieceId)
-                  return $ Just "hashFail" -- we remove it from Chunks
-                                    -- but do not modify the bitfield,
-                                    -- it will be reacquired again
-            False -> return Nothing
+                  return $ Just "hashFail"
+                    -- we remove it from Chunks
+                    -- but do not modify the bitfield,
+                    -- it will be reacquired again
+            else return Nothing
         Nothing -> return Nothing
 
     case dataToWrite of
