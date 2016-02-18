@@ -66,6 +66,7 @@ import Control.Monad.State.Strict
 import Control.Monad.Trans.Free.Church
 import Crypto.Hash.SHA1
 import qualified Data.Binary as Binary
+import qualified Data.Binary.Get as Binary
 import qualified Data.ByteString as B
 import Data.ByteString.Conversion
 import qualified Data.ByteString.Lazy as BL
@@ -300,15 +301,18 @@ runPeerMonad state pData outHandle t = do
   where
     inside = iterM evalPeerMonadIO
     messageForwarder handle privateChan = (do
-      input <- BL.hGetContents handle
-      let messages = messageStream input
-      traverse_ (writeChan privateChan . PWPEvent) messages)
+      messageStream handle (writeChan privateChan . PWPEvent))
       `onException` writeChan privateChan (ErrorEvent ConnectionLost)
-    messageStream :: BL.ByteString -> [PWP]
-    messageStream input =
-      case Binary.decodeOrFail input of
-        Left _ -> []
-        Right (rest, _, msg) -> msg : messageStream rest
+    messageStream :: Handle -> (PWP -> IO ()) -> IO ()
+    messageStream hdl act = go initial
+      where initial = Binary.runGetIncremental Binary.get
+            bufSize = (2 :: Int) ^ (14 :: Int)
+            go (Binary.Fail {}) = return ()
+            go (Binary.Partial next) = do
+              hWaitForInput hdl (-1)
+              B.hGetSome hdl bufSize >>= go . next . Just
+            go (Binary.Done unused _ value) =
+              act value *> go (initial `Binary.pushChunk` unused)
 
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
 evalPeerMonadIO (RunMemory a next) = {-# SCC "runMemory" #-} do

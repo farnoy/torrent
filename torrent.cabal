@@ -61,6 +61,7 @@ library
                  , time
                  , transformers
                  , ttrie
+                 , unix
                  , uuid
                  , vector
   default-language:    Haskell2010
