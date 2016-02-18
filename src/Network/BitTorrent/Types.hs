@@ -66,25 +66,8 @@ data TorrentState (t :: ClassToken) = TorrentState {
 , torrentStateOutputHandles     :: Seq (Word64, Word64, Handle)
 , torrentStateOutputLock        :: MVar ()
 , torrentStateSharedMessages    :: Chan SharedMessage
+, torrentStatePeerThreads       :: TVar (Seq (ThreadId, ByteString))
 }
-
-{-
--- | Stores information about the client application.
--- Holds references to shared memory peer loops use to coordinate work.
-data ClientState (t :: ClassToken) = ClientState {
-  myPeerId :: ByteString
-, metaInfo :: MetaInfo
-, bitField :: TVar BitField
-, requestablePieces :: TVar IntSet
-, clientStateDownloadProgress :: DP.Backend t
-, outputHandles :: Seq (Word64, Word64, Handle)
-, outputLock :: MVar ()
-, ourPort :: Word16
--- , availabilityData :: TVar PS.AvailabilityData
-, sharedMessages :: Chan SharedMessage
-}
-
--}
 
 -- | Create a new 'PeerData' structure.
 newPeer :: BitField -> SockAddr -> ByteString -> PeerData

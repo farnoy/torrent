@@ -51,6 +51,7 @@ module Network.BitTorrent.PeerMonad (
 ) where
 
 import Control.Concurrent
+import Control.Concurrent.STM.TVar
 import Control.Concurrent.Async
 import Control.DeepSeq
 import Control.Monad
@@ -74,6 +75,7 @@ import Data.Foldable (traverse_)
 import qualified Data.IntSet as IntSet
 import Data.Map.Strict as Map
 import Data.Monoid
+import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Word
@@ -282,20 +284,31 @@ runPeerMonad state pData outHandle t = do
   promise1 <- async $ messageForwarder outHandle privateChan
   promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
-  let action = runStderrLoggingT (evalStateT (runReaderT (runExceptT (inside t)) state) peerState)
-  action `finally` (cancel promise1 *> cancel promise2 *> hClose outHandle)
+  myId <- myThreadId
+  atomically $ modifyTVar' (torrentStatePeerThreads state) (Seq.|> (myId, peerId pData))
 
-  where inside = iterM evalPeerMonadIO
-        messageForwarder handle privateChan = (do
-          input <- BL.hGetContents handle
-          let messages = messageStream input
-          traverse_ (writeChan privateChan . PWPEvent) messages)
-          `onException` writeChan privateChan (ErrorEvent ConnectionLost)
-        messageStream :: BL.ByteString -> [PWP]
-        messageStream input =
-          case Binary.decodeOrFail input of
-            Left _ -> []
-            Right (rest, _, msg) -> msg : messageStream rest
+  let action = runStderrLoggingT (evalStateT (runReaderT (runExceptT (inside t)) state) peerState)
+      cleanup = do
+        cancel promise1
+        cancel promise2
+        hClose outHandle
+        atomically $ modifyTVar' (torrentStatePeerThreads state)
+                                 (Seq.filter ((/= myId) . fst))
+
+  action `finally` cleanup
+
+  where
+    inside = iterM evalPeerMonadIO
+    messageForwarder handle privateChan = (do
+      input <- BL.hGetContents handle
+      let messages = messageStream input
+      traverse_ (writeChan privateChan . PWPEvent) messages)
+      `onException` writeChan privateChan (ErrorEvent ConnectionLost)
+    messageStream :: BL.ByteString -> [PWP]
+    messageStream input =
+      case Binary.decodeOrFail input of
+        Left _ -> []
+        Right (rest, _, msg) -> msg : messageStream rest
 
 evalPeerMonadIO :: PeerMonad (PeerMonadIO a) -> PeerMonadIO a
 evalPeerMonadIO (RunMemory a next) = {-# SCC "runMemory" #-} do

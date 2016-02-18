@@ -27,10 +27,12 @@ library
                    , Network.BitTorrent.PeerMonad
                    , Network.BitTorrent.PieceSelection
                    , Network.BitTorrent.PWP
+                   , Network.BitTorrent.RPCServer
                    , Network.BitTorrent.Types
                    , Network.BitTorrent.Utility
-  ghc-options:   -Wall -Werror -O2 -fprof-auto -caf-all -fno-warn-name-shadowing
+  ghc-options:   -Wall -O2 -fprof-auto -caf-all -fno-warn-name-shadowing
   build-depends:   base >= 4.7 && < 5
+                 , aeson
                  , async
                  , attoparsec
                  , binary
@@ -52,10 +54,12 @@ library
                  , mtl
                  , network
                  , random
+                 , scotty
                  , stm
                  , stm-containers
                  , text
                  , time
+                 , transformers
                  , ttrie
                  , uuid
                  , vector
@@ -64,7 +68,7 @@ library
 executable torrent
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -Wall -Werror -O2 -fprof-auto -fno-warn-name-shadowing
+  ghc-options:         -threaded -rtsopts -Wall -O2 -fprof-auto -fno-warn-name-shadowing
   build-depends:       base
                      , attoparsec
                      , async
@@ -78,6 +82,7 @@ executable torrent
                      , http-types
                      , lens-family
                      , network
+                     , scotty
                      , stm
                      , torrent
                      , unix

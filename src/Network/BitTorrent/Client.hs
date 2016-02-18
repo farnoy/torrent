@@ -7,6 +7,7 @@ module Network.BitTorrent.Client (
   newGlobalState
 , newTorrentState
 , addActiveTorrent
+, runTorrent
 , newPeer
 , btListen
 , queryTracker
@@ -26,7 +27,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Conversion (fromByteString)
-import Data.Foldable (find)
+import Data.Foldable (find, traverse_)
 import qualified Data.IntSet as IntSet
 import Data.Maybe
 import Data.Sequence (Seq)
@@ -68,7 +69,15 @@ newTorrentState dir meta = do
   mvar <- newMVar ()
   sharedMessages <- newChan
   dp <- atomically $ DP.new numPieces
-  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages
+  peerThreads <- newTVarIO Seq.empty
+  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads
+
+runTorrent :: GlobalState -> MetaInfo -> IO ()
+runTorrent globalState meta = do
+  torrentState <- newTorrentState "." meta
+  addActiveTorrent globalState torrentState
+  peers <- queryTracker globalState torrentState
+  traverse_ (forkIO . reachOutToPeer globalState torrentState) peers
 
 addActiveTorrent :: GlobalState -> TorrentState 'Production -> IO ()
 addActiveTorrent global local =
