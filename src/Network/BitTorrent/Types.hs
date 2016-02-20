@@ -16,6 +16,7 @@ module Network.BitTorrent.Types (
 , expectedChunkSize
 , PieceId(..)
 , ChunkId(..)
+, Pipe(..)
 ) where
 
 import Control.Concurrent
@@ -25,19 +26,20 @@ import Data.ByteString.Internal as BI
 import Data.IntSet (IntSet)
 import Data.Map.Strict (Map)
 import Data.Sequence (Seq)
--- import Hexdump
 import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.MetaInfo as Meta
--- import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Utility
 import Network.Socket
 import System.IO
+import System.Posix.Types
 
 -- | Describes the limit of requests in flight to a single peer.
 maxRequestsPerPeer :: Word8
 maxRequestsPerPeer = 64
+
+data Pipe = Pipe { readEnd :: Fd, writEnd :: Fd } deriving (Eq, Show)
 
 -- | Stores information about a peer.
 data PeerData = PeerData {
@@ -64,6 +66,7 @@ data TorrentState (t :: ClassToken) = TorrentState {
 , torrentStateRequestablePieces :: TVar IntSet
 , torrentStateDownloadProgress  :: DP.Backend t
 , torrentStateOutputHandles     :: Seq (Word64, Word64, Handle)
+, torrentStateOutputFds         :: Seq (Word64, Word64, Fd)
 , torrentStateOutputLock        :: MVar ()
 , torrentStateSharedMessages    :: Chan SharedMessage
 , torrentStatePeerThreads       :: TVar (Seq (ThreadId, ByteString))
