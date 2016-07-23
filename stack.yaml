@@ -3,4 +3,4 @@ packages:
 - '.'
 extra-deps:
   - binary-literal-qq-1.0
-resolver: lts-5.3
+resolver: lts-6.8

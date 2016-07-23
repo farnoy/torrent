@@ -10,8 +10,9 @@ module Network.BitTorrent.RPCServer (
 
 import Control.Concurrent.STM
 import Control.Monad.IO.Class
-import qualified Data.Aeson as Aeson
+import Data.Aeson((.=), object, ToJSON(..))
 import qualified Data.ByteString as B
+import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import GHC.Generics (Generic)
@@ -23,15 +24,24 @@ import Numeric
 import Web.Scotty
 
 data TorrentInfo = TorrentInfo
-  { infoHash :: T.Text
-  , progress :: Float
-  } deriving (Generic, Aeson.ToJSON)
+  { torrentInfoHash :: T.Text
+  , torrentInfoName :: T.Text
+  , torrentInfoProgress :: Float
+  }
+
+instance ToJSON TorrentInfo where
+  toJSON (TorrentInfo hash name progress) = object ["infoHash" .= hash
+                                                   , "name" .= name
+                                                   , "progress" .= progress
+                                                   ]
 
 extractTorrentInfo :: TorrentState 'Production -> IO TorrentInfo
 extractTorrentInfo state = do
   bf <- atomically $ readTVar $ torrentStateBitField state
-  let infoHash = T.pack $ foldr showHex "" (B.unpack $ Meta.infoHash $ torrentStateMetaInfo state)
-  return $ TorrentInfo infoHash (BF.completed bf)
+  let meta = torrentStateMetaInfo state
+      infoHash = T.pack $ foldr showHex "" $ B.unpack $ Meta.infoHash meta
+      Just fileName = fromByteString $ Meta.name $ head $ Meta.files $ Meta.info $ torrentStateMetaInfo state
+  return $ TorrentInfo infoHash fileName (BF.completed bf)
 
 server :: GlobalState -> ScottyM ()
 server globalState = do
