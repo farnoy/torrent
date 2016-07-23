@@ -8,6 +8,7 @@ module Network.BitTorrent.Client (
 , newTorrentState
 , addActiveTorrent
 , runTorrent
+, stopTorrent
 , newPeer
 , btListen
 , queryTracker
@@ -70,7 +71,8 @@ newTorrentState dir meta = do
   sharedMessages <- newChan
   dp <- atomically $ DP.new numPieces
   peerThreads <- newTVarIO Seq.empty
-  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads
+  status <- newTVarIO Active
+  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads status
 
 runTorrent :: GlobalState -> MetaInfo -> IO ()
 runTorrent globalState meta = do
@@ -78,6 +80,17 @@ runTorrent globalState meta = do
   addActiveTorrent globalState torrentState
   peers <- queryTracker globalState torrentState
   traverse_ (forkIO . reachOutToPeer globalState torrentState) peers
+
+stopTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+stopTorrent globalState torrentState = do
+  writeChan (torrentStateSharedMessages torrentState) Exit
+  threads <- atomically $ readTVar $ torrentStatePeerThreads torrentState
+  unless (Seq.null threads) $ do
+    putStrLn "killing peers who refused after 5 seconds"
+    threadDelay 5000000
+    print threads
+    traverse_ (killThread . fst) threads
+  traverse_ (\(_, _, h) -> hClose h) (torrentStateOutputHandles torrentState)
 
 addActiveTorrent :: GlobalState -> TorrentState 'Production -> IO ()
 addActiveTorrent global local =

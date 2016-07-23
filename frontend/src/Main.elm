@@ -1,10 +1,10 @@
 import Html exposing (..)
 import Html.App as Html
-import Html.Attributes exposing (style)
-import Html.Events exposing (onClick)
+import Html.Attributes exposing (..)
+import Html.Events exposing (..)
 import Http exposing (getString)
 import Http
-import Json.Decode exposing(decodeString, (:=), string, float, Decoder)
+import Json.Decode exposing(..)
 import Json.Decode as Json
 import Task as Task
 import Time
@@ -31,7 +31,16 @@ view model =
   div []
     [ button [ onClick ReloadActive ] [ text "Refresh" ]
     , table [] [
-        tbody [] (List.map viewTorrent model.activeTorrents)
+        thead [] [
+          tr [] [
+            th [] [text "name"]
+          , th [] [text "progress"]
+          , th [] [text "infohash"]
+          , th [] [text "status"]
+          , th [] [text "connected peers"]
+          ]
+        ]
+      , tbody [] (List.map viewTorrent model.activeTorrents)
       ]
     , if model.connectionLive then text "Connection live" else text "Connection lost"
     ]
@@ -41,6 +50,8 @@ viewTorrent torrent =
     td [] [text torrent.name]
   , td [] [text <| toString torrent.progress]
   , td [] [text torrent.infoHash]
+  , td [] [text torrent.status]
+  , td [] [text <| toString torrent.peerCount]
   ]
 
 
@@ -61,14 +72,23 @@ update action model =
     SetActiveTorrents list -> ({ model | activeTorrents = list, connectionLive = True }, Cmd.none)
     LoseConnection -> ({ model | activeTorrents = [], connectionLive = False }, Cmd.none)
 
-type alias ActiveTorrent = { infoHash : String, name : String, progress: Float }
+type alias ActiveTorrent =
+  {
+    infoHash : String
+  , name : String
+  , progress : Float
+  , status : String
+  , peerCount : Int
+  }
 
 activeTorrentDecoder : Decoder ActiveTorrent
 activeTorrentDecoder =
-  Json.object3 ActiveTorrent
+  Json.object5 ActiveTorrent
     ("infoHash" := string)
     ("name" := string)
     ("progress" := float)
+    ("status" := string)
+    ("peers" := int)
 
 parseResponse : Result Http.Error String -> Msg
 parseResponse res =

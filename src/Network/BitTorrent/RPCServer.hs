@@ -15,6 +15,8 @@ import qualified Data.ByteString as B
 import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
+import qualified Data.Sequence as Seq
+import Data.Word
 import GHC.Generics (Generic)
 import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.MetaInfo as Meta
@@ -27,21 +29,35 @@ data TorrentInfo = TorrentInfo
   { torrentInfoHash :: T.Text
   , torrentInfoName :: T.Text
   , torrentInfoProgress :: Float
+  , torrentInfoStatus :: TorrentStatus
+  , torrentInfoConnectedPeers :: Word32
   }
 
+statusToString :: TorrentStatus -> T.Text
+statusToString Active = "active"
+statusToString Paused = "paused"
+statusToString Stopped = "stopped"
+
 instance ToJSON TorrentInfo where
-  toJSON (TorrentInfo hash name progress) = object ["infoHash" .= hash
+  toJSON (TorrentInfo hash name progress status peerCount) = object ["infoHash" .= hash
                                                    , "name" .= name
                                                    , "progress" .= progress
+                                                   , "status" .= statusToString status
+                                                   , "peers" .= peerCount
                                                    ]
 
 extractTorrentInfo :: TorrentState 'Production -> IO TorrentInfo
 extractTorrentInfo state = do
-  bf <- atomically $ readTVar $ torrentStateBitField state
+  (bf, status, peerCount) <- atomically $ do
+    bf <- readTVar $ torrentStateBitField state
+    status <- readTVar $ torrentStateStatus state
+    peerCount <- fromIntegral . Seq.length <$> (readTVar $ torrentStatePeerThreads state)
+    return (bf, status, peerCount)
+
   let meta = torrentStateMetaInfo state
       infoHash = T.pack $ foldr showHex "" $ B.unpack $ Meta.infoHash meta
       Just fileName = fromByteString $ Meta.name $ head $ Meta.files $ Meta.info $ torrentStateMetaInfo state
-  return $ TorrentInfo infoHash fileName (BF.completed bf)
+  return $ TorrentInfo infoHash fileName (BF.completed bf) status peerCount
 
 server :: GlobalState -> ScottyM ()
 server globalState = do

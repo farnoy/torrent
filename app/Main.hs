@@ -49,15 +49,7 @@ main = do
 cleanup :: GlobalState -> IO ()
 cleanup globalState = do
   torrents <- atomically $ readTVar $ globalStateTorrents globalState
-  traverse_ (flip writeChan Exit . torrentStateSharedMessages) torrents
-  traverse_ (traverse_ (\(_, _, h) -> hClose h)) (torrentStateOutputHandles <$> torrents)
-  threads <- join <$> traverse (atomically . readTVar . torrentStatePeerThreads) torrents
-  unless (Seq.null threads) $ do
-    putStrLn "killing peers who refused after 5 seconds"
-    threadDelay 5000000
-    print threads
-    traverse_ (killThread . fst) threads
-
+  traverse_ (stopTorrent globalState) torrents
   putStrLn "quiting cleanup"
 
 progressLogger :: GlobalState -> IO ()

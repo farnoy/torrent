@@ -6,6 +6,7 @@ module Network.BitTorrent.Types (
   maxRequestsPerPeer
 , PeerData(..)
 , newPeer
+, TorrentStatus(..)
 , TorrentState(..)
 , GlobalState(..)
 , SharedMessage(..)
@@ -58,6 +59,8 @@ data GlobalState = GlobalState {
 , globalStateTorrents   :: TVar (Seq (TorrentState 'Production))
 }
 
+data TorrentStatus = Active | Paused | Stopped
+
 data TorrentState (t :: ClassToken) = TorrentState {
   torrentStateMetaInfo          :: MetaInfo
 , torrentStateBitField          :: TVar BitField
@@ -67,6 +70,7 @@ data TorrentState (t :: ClassToken) = TorrentState {
 , torrentStateOutputLock        :: MVar ()
 , torrentStateSharedMessages    :: Chan SharedMessage
 , torrentStatePeerThreads       :: TVar (Seq (ThreadId, ByteString))
+, torrentStateStatus            :: TVar TorrentStatus
 }
 
 -- | Create a new 'PeerData' structure.
