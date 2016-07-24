@@ -8,6 +8,7 @@ module Network.BitTorrent.Client (
 , newTorrentState
 , addActiveTorrent
 , runTorrent
+, startTorrent
 , stopTorrent
 , newPeer
 , btListen
@@ -78,6 +79,11 @@ runTorrent :: GlobalState -> MetaInfo -> IO ()
 runTorrent globalState meta = do
   torrentState <- newTorrentState "." meta
   addActiveTorrent globalState torrentState
+  startTorrent globalState torrentState
+
+startTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+startTorrent globalState torrentState = do
+  atomically $ writeTVar (torrentStateStatus torrentState) Active
   peers <- queryTracker globalState torrentState
   traverse_ (forkIO . reachOutToPeer globalState torrentState) peers
 
@@ -91,7 +97,9 @@ stopTorrent globalState torrentState = do
     threadDelay 5000000
     print threads
     traverse_ (killThread . fst) threads
-  traverse_ (\(_, _, h) -> hClose h) (torrentStateOutputHandles torrentState)
+  -- Not closing them here as they can be restarted.
+  -- This should be improved in the future.
+  -- traverse_ (\(_, _, h) -> hClose h) (torrentStateOutputHandles torrentState)
 
 addActiveTorrent :: GlobalState -> TorrentState 'Production -> IO ()
 addActiveTorrent global local =

@@ -70,6 +70,7 @@ server globalState = do
       traverse extractTorrentInfo torrents
     setHeader "Access-Control-Allow-Origin" "*"
     json response
+
   post "/stop" $ do
     infoHashHex <- param "infoHash"
     let (infoHash, _) = B16.decode infoHashHex
@@ -86,6 +87,26 @@ server globalState = do
     case torrentState of
       Just s -> do
         liftIO $ Client.stopTorrent globalState s
+        text "{\"status\": \"ok\"}"
+      Nothing -> do
+        text "{\"status\": \"failed\"}"
+
+  post "/start" $ do
+    infoHashHex <- param "infoHash"
+    let (infoHash, _) = B16.decode infoHashHex
+    torrentState <- liftIO $ atomically $ do
+      torrents <- readTVar $ globalStateTorrents globalState
+      let torrentState =
+            case Seq.findIndexL ((==infoHash) . Meta.infoHash . torrentStateMetaInfo) torrents of
+              Just ix -> Just $ Seq.index torrents ix
+              Nothing -> Nothing
+      return torrentState
+
+    setHeader "Access-Control-Allow-Origin" "*"
+
+    case torrentState of
+      Just s -> do
+        liftIO $ Client.startTorrent globalState s
         text "{\"status\": \"ok\"}"
       Nothing -> do
         text "{\"status\": \"failed\"}"

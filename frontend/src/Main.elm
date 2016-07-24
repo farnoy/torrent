@@ -38,6 +38,7 @@ view model =
           , th [] [text "infohash"]
           , th [] [text "status"]
           , th [] [text "connected peers"]
+          , th [] [text "start"]
           , th [] [text "stop"]
           ]
         ]
@@ -53,7 +54,8 @@ viewTorrent torrent =
   , td [] [text torrent.infoHash]
   , td [] [text torrent.status]
   , td [] [text <| toString torrent.peerCount]
-  , td [] [button [ onClick (StopTorrent torrent.infoHash) ] [ text "stop" ] ]
+  , td [] [button [ onClick (StartTorrent torrent.infoHash), disabled (torrent.status == "active") ] [ text "start" ] ]
+  , td [] [button [ onClick (StopTorrent torrent.infoHash), disabled (torrent.status == "stopped") ] [ text "stop" ] ]
   ]
 
 
@@ -62,6 +64,7 @@ type Msg =
   | SetActiveTorrents (List ActiveTorrent)
   | Noop
   | LoseConnection
+  | StartTorrent String
   | StopTorrent String
 
 
@@ -74,6 +77,7 @@ update action model =
     Noop -> (model, Cmd.none)
     SetActiveTorrents list -> ({ model | activeTorrents = list, connectionLive = True }, Cmd.none)
     LoseConnection -> ({ model | activeTorrents = [], connectionLive = False }, Cmd.none)
+    StartTorrent infoHash -> (model, post (keyValuePairs string) "http://localhost:8036/start" (multipart [stringData "infoHash" infoHash]) |> Task.toResult |> Task.perform (\_ -> Noop) (\_ -> Noop))
     StopTorrent infoHash -> (model, post (keyValuePairs string) "http://localhost:8036/stop" (multipart [stringData "infoHash" infoHash]) |> Task.toResult |> Task.perform (\_ -> Noop) (\_ -> Noop))
 
 type alias ActiveTorrent =
