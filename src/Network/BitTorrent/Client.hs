@@ -83,6 +83,7 @@ runTorrent globalState meta = do
 
 stopTorrent :: GlobalState -> TorrentState 'Production -> IO ()
 stopTorrent globalState torrentState = do
+  atomically $ writeTVar (torrentStateStatus torrentState) Stopped
   writeChan (torrentStateSharedMessages torrentState) Exit
   threads <- atomically $ readTVar $ torrentStatePeerThreads torrentState
   unless (Seq.null threads) $ do
@@ -130,15 +131,23 @@ startFromPeerHandshake globalState sock addr = do
         return $ find ((==hisInfoHash) . infoHash . torrentStateMetaInfo) torrents
 
       case ourTorrentState of
-        Just torrent -> do
-          writeHandshake handle globalState torrent
+        Just torrentState -> do
+          status <- atomically $ readTVar $ torrentStateStatus torrentState
 
-          let bf = BF.newBitField (pieceCount torrent)
-              pData = newPeer bf addr peer
+          case status of
+            Active -> do
+              writeHandshake handle globalState torrentState
 
-          mainPeerLoop torrent pData handle
-          pure ()
-        Nothing ->  hClose handle
+              let bf = BF.newBitField (pieceCount torrentState)
+                  pData = newPeer bf addr peer
+
+              mainPeerLoop torrentState pData handle
+              pure ()
+
+            -- when stopped or paused, we don't accept any peers
+            Paused -> hClose handle
+            Stopped -> hClose handle
+        Nothing -> hClose handle
     Nothing -> hClose handle
 
 pieceCount :: TorrentState 'Production -> Word32

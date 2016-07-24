@@ -2,7 +2,7 @@ import Html exposing (..)
 import Html.App as Html
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
-import Http exposing (getString)
+import Http exposing (getString, post, multipart, stringData)
 import Http
 import Json.Decode exposing(..)
 import Json.Decode as Json
@@ -38,6 +38,7 @@ view model =
           , th [] [text "infohash"]
           , th [] [text "status"]
           , th [] [text "connected peers"]
+          , th [] [text "stop"]
           ]
         ]
       , tbody [] (List.map viewTorrent model.activeTorrents)
@@ -52,6 +53,7 @@ viewTorrent torrent =
   , td [] [text torrent.infoHash]
   , td [] [text torrent.status]
   , td [] [text <| toString torrent.peerCount]
+  , td [] [button [ onClick (StopTorrent torrent.infoHash) ] [ text "stop" ] ]
   ]
 
 
@@ -60,6 +62,7 @@ type Msg =
   | SetActiveTorrents (List ActiveTorrent)
   | Noop
   | LoseConnection
+  | StopTorrent String
 
 
 update : Msg -> Model -> (Model, Cmd Msg)
@@ -71,6 +74,7 @@ update action model =
     Noop -> (model, Cmd.none)
     SetActiveTorrents list -> ({ model | activeTorrents = list, connectionLive = True }, Cmd.none)
     LoseConnection -> ({ model | activeTorrents = [], connectionLive = False }, Cmd.none)
+    StopTorrent infoHash -> (model, post (keyValuePairs string) "http://localhost:8036/stop" (multipart [stringData "infoHash" infoHash]) |> Task.toResult |> Task.perform (\_ -> Noop) (\_ -> Noop))
 
 type alias ActiveTorrent =
   {

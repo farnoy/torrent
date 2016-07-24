@@ -11,18 +11,16 @@ module Network.BitTorrent.RPCServer (
 import Control.Concurrent.STM
 import Control.Monad.IO.Class
 import Data.Aeson((.=), object, ToJSON(..))
-import qualified Data.ByteString as B
+import qualified Data.ByteString.Base16 as B16
 import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
 import qualified Data.Sequence as Seq
 import Data.Word
-import GHC.Generics (Generic)
 import qualified Network.BitTorrent.BitField as BF
+import qualified Network.BitTorrent.Client as Client
 import qualified Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.Types
 import Network.BitTorrent.Utility
-import Numeric
 import Web.Scotty
 
 data TorrentInfo = TorrentInfo
@@ -39,12 +37,13 @@ statusToString Paused = "paused"
 statusToString Stopped = "stopped"
 
 instance ToJSON TorrentInfo where
-  toJSON (TorrentInfo hash name progress status peerCount) = object ["infoHash" .= hash
-                                                   , "name" .= name
-                                                   , "progress" .= progress
-                                                   , "status" .= statusToString status
-                                                   , "peers" .= peerCount
-                                                   ]
+  toJSON info@TorrentInfo {} =
+    object [ "infoHash" .= torrentInfoHash info
+           , "name" .= torrentInfoName info
+           , "progress" .= torrentInfoProgress info
+           , "status" .= statusToString (torrentInfoStatus info)
+           , "peers" .= torrentInfoConnectedPeers info
+           ]
 
 extractTorrentInfo :: TorrentState 'Production -> IO TorrentInfo
 extractTorrentInfo state = do
@@ -55,7 +54,7 @@ extractTorrentInfo state = do
     return (bf, status, peerCount)
 
   let meta = torrentStateMetaInfo state
-      infoHash = T.pack $ foldr showHex "" $ B.unpack $ Meta.infoHash meta
+      Just infoHash = fromByteString $ B16.encode $ Meta.infoHash meta
       Just fileName = fromByteString $ Meta.name $ head $ Meta.files $ Meta.info $ torrentStateMetaInfo state
   return $ TorrentInfo infoHash fileName (BF.completed bf) status peerCount
 
@@ -63,12 +62,30 @@ server :: GlobalState -> ScottyM ()
 server globalState = do
   get "/" $ do
     setHeader "Access-Control-Allow-Origin" "*"
-    let peerId = foldr showHex "" (B.unpack (globalStatePeerId globalState))
-    text $ TL.pack peerId
+    let Just peerId = fromByteString $ B16.encode $ globalStatePeerId globalState
+    text peerId
   get "/active" $ do
     response <- liftIO $ do
       torrents <- atomically $ readTVar $ globalStateTorrents globalState
       traverse extractTorrentInfo torrents
     setHeader "Access-Control-Allow-Origin" "*"
     json response
+  post "/stop" $ do
+    infoHashHex <- param "infoHash"
+    let (infoHash, _) = B16.decode infoHashHex
+    torrentState <- liftIO $ atomically $ do
+      torrents <- readTVar $ globalStateTorrents globalState
+      let torrentState =
+            case Seq.findIndexL ((==infoHash) . Meta.infoHash . torrentStateMetaInfo) torrents of
+              Just ix -> Just $ Seq.index torrents ix
+              Nothing -> Nothing
+      return torrentState
 
+    setHeader "Access-Control-Allow-Origin" "*"
+
+    case torrentState of
+      Just s -> do
+        liftIO $ Client.stopTorrent globalState s
+        text "{\"status\": \"ok\"}"
+      Nothing -> do
+        text "{\"status\": \"failed\"}"

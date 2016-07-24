@@ -36,6 +36,7 @@ library
                  , async
                  , attoparsec
                  , binary
+                 , base16-bytestring
                  , base64-bytestring
                  , bytestring
                  , bytestring-conversion
