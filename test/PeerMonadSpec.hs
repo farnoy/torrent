@@ -50,26 +50,23 @@ data Memory = Memory { memoryBitField :: BF.BitField
                      , memoryRequestablePieces :: IntSet
                      }
 
-class TorrentStateDumper t where
-  clientStateToMemory :: TorrentState t -> IO Memory
+clientStateToMemory :: TorrentState -> IO Memory
+clientStateToMemory state = atomically (Memory
+                                           <$> readTVar (torrentStateBitField state)
+                                           <*> readPieceChunks state
+                                           -- <*> readTVar (availabilityData state)
+                                           <*> readTVar (torrentStateRequestablePieces state))
 
-instance TorrentStateDumper 'Production where
-  clientStateToMemory state = atomically (Memory
-                                             <$> readTVar (torrentStateBitField state)
-                                             <*> readPieceChunks state
-                                             -- <*> readTVar (availabilityData state)
-                                             <*> readTVar (torrentStateRequestablePieces state))
-
-    where readPieceChunks :: TorrentState 'Production -> STM Chunks
-          readPieceChunks state =
-            fmap (Map.fromList . convert) (traverse lookup' [PieceId k | k <- [0..(pieceCount - 1)]])
-            where pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo $ state
-                  lookup' :: PieceId -> STM (Maybe (PieceId, CF.ChunkField))
-                  lookup' k = fmap (fmap (k,)) (DP.lookup k (torrentStateDownloadProgress state))
-                  convert :: [Maybe (PieceId, CF.ChunkField)] -> [(PieceId, CF.ChunkField)]
-                  convert = foldl f []
-                  f accu (Just assoc) = assoc : accu
-                  f accu Nothing = accu
+  where readPieceChunks :: TorrentState -> STM Chunks
+        readPieceChunks state =
+          fmap (Map.fromList . convert) (traverse lookup' [PieceId k | k <- [0..(pieceCount - 1)]])
+          where pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo $ state
+                lookup' :: PieceId -> STM (Maybe (PieceId, CF.ChunkField))
+                lookup' k = fmap (fmap (k,)) (DP.lookup k (torrentStateDownloadProgress state))
+                convert :: [Maybe (PieceId, CF.ChunkField)] -> [(PieceId, CF.ChunkField)]
+                convert = foldl f []
+                f accu (Just assoc) = assoc : accu
+                f accu Nothing = accu
 
 type MemoryMonadTest = StateT Memory Identity
 
@@ -116,9 +113,9 @@ data PeerState = PeerState { peerStateData :: PeerData
                            , peerStateCurrentTime :: UTCTime
                            }
 
-type PeerMonadTest t = CatchT (ReaderT (TorrentState t) (StateT PeerState Identity))
+type PeerMonadTest = CatchT (ReaderT TorrentState (StateT PeerState Identity))
 
-runPeerMonadTest :: TorrentState t
+runPeerMonadTest :: TorrentState
                  -> PeerData
                  -> Memory
                  -> [PeerEvent]
@@ -142,7 +139,7 @@ runPeerMonadTest state pData memory events t refTime =
                    peerState
                  )
 
-evalPeerMonadTest :: PeerMonad (PeerMonadTest t a) -> PeerMonadTest t a
+evalPeerMonadTest :: PeerMonad (PeerMonadTest a) -> PeerMonadTest a
 evalPeerMonadTest (GetPeerData next) = do
   PeerState pData _ _ _ _ _ <- get
   next pData
