@@ -116,7 +116,7 @@ data PeerError = ConnectionLost
 instance Exception PeerError
 
 -- TODO Logger
-type PeerMonadIO = ExceptT PeerError (ReaderT (TorrentState 'Production) (StateT PeerState (LoggingT IO)))
+type PeerMonadIO = ExceptT PeerError (ReaderT TorrentState (StateT PeerState (LoggingT IO)))
 
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
@@ -271,7 +271,7 @@ log exp = do
 -- It forwards 'SharedMessage's and 'PWP' messages to the 'PeerMonad' to act upon.
 --
 -- Nested 'MemoryMonad' expressions are evaluated using STM.
-runPeerMonad :: TorrentState 'Production
+runPeerMonad :: TorrentState
              -> PeerData
              -> Handle -- ^ socket handle to communicate with the peer
              -> F PeerMonad a -- ^ PeerMonad expression to evaluate

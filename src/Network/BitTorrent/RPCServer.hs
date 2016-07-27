@@ -48,7 +48,7 @@ instance ToJSON TorrentInfo where
            , "bitField" .= torrentInfoBitField info
            ]
 
-extractTorrentInfo :: TorrentState 'Production -> IO TorrentInfo
+extractTorrentInfo :: TorrentState -> IO TorrentInfo
 extractTorrentInfo state = do
   (bf, status, peerCount) <- atomically $ do
     bf <- readTVar $ torrentStateBitField state

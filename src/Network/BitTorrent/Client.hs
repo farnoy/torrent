@@ -45,7 +45,6 @@ import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
-import Network.BitTorrent.Utility
 import Network.HTTP.Client
 import Network.Socket
 import System.FilePath
@@ -61,7 +60,7 @@ newGlobalState port = do
 -- | Create a 'TorrentState'.
 newTorrentState :: FilePath -- ^ Output directory for downloaded files
                -> MetaInfo
-               -> IO (TorrentState 'Production)
+               -> IO TorrentState
 newTorrentState dir meta = do
   let numPieces :: Integral a => a
       numPieces = fromIntegral (B.length $ pieces $ info meta) `quot` 20
@@ -81,13 +80,13 @@ runTorrent globalState meta = do
   addActiveTorrent globalState torrentState
   startTorrent globalState torrentState
 
-startTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+startTorrent :: GlobalState -> TorrentState -> IO ()
 startTorrent globalState torrentState = do
   atomically $ writeTVar (torrentStateStatus torrentState) Active
   peers <- queryTracker globalState torrentState
   traverse_ (forkIO . reachOutToPeer globalState torrentState) peers
 
-stopTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+stopTorrent :: GlobalState -> TorrentState -> IO ()
 stopTorrent globalState torrentState = do
   atomically $ writeTVar (torrentStateStatus torrentState) Stopped
   writeChan (torrentStateSharedMessages torrentState) Exit
@@ -101,7 +100,7 @@ stopTorrent globalState torrentState = do
   -- This should be improved in the future.
   -- traverse_ (\(_, _, h) -> hClose h) (torrentStateOutputHandles torrentState)
 
-addActiveTorrent :: GlobalState -> TorrentState 'Production -> IO ()
+addActiveTorrent :: GlobalState -> TorrentState -> IO ()
 addActiveTorrent global local =
   atomically $ modifyTVar' (globalStateTorrents global) (Seq.|> local)
 
@@ -158,11 +157,11 @@ startFromPeerHandshake globalState sock addr = do
         Nothing -> hClose handle
     Nothing -> hClose handle
 
-pieceCount :: TorrentState 'Production -> Word32
+pieceCount :: TorrentState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo
 
 -- | Reach out to peer located at the address and enter the peer loop.
-reachOutToPeer :: GlobalState -> TorrentState 'Production -> SockAddr -> IO ()
+reachOutToPeer :: GlobalState -> TorrentState -> SockAddr -> IO ()
 reachOutToPeer globalState state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
@@ -182,7 +181,7 @@ reachOutToPeer globalState state addr = do
         pure ()
     Nothing -> hClose handle
 
-writeHandshake :: Handle -> GlobalState -> TorrentState 'Production -> IO ()
+writeHandshake :: Handle -> GlobalState -> TorrentState -> IO ()
 writeHandshake handle globalState state = BL.hPut handle handshake
   where handshake = encode $ BHandshake (infoHash . torrentStateMetaInfo $ state) (globalStatePeerId globalState)
 {-# INLINABLE writeHandshake #-}
@@ -195,12 +194,12 @@ readHandshake handle = do
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: TorrentState 'Production -> PeerData -> Handle -> IO (Either PeerError ())
+mainPeerLoop :: TorrentState -> PeerData -> Handle -> IO (Either PeerError ())
 mainPeerLoop state pData handle =
   runPeerMonad state pData handle entryPoint
 
 -- | Ask the tracker for peers and return the result addresses.
-queryTracker :: GlobalState -> TorrentState 'Production -> IO [SockAddr]
+queryTracker :: GlobalState -> TorrentState -> IO [SockAddr]
 queryTracker globalState state = do
   let meta = torrentStateMetaInfo state
       url = fromByteString (announce meta) >>= parseUrl

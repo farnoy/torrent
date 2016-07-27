@@ -38,7 +38,6 @@ import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.DownloadProgress as DP
 import Network.BitTorrent.Types
-import Network.BitTorrent.Utility
 
 -- | Encodes memory operations.
 data MemoryMonad a = GetDownloadProgress PieceId (Maybe CF.ChunkField -> a)
@@ -106,7 +105,7 @@ modifyRequestablePieces :: (IntSet -> IntSet) -> F MemoryMonad ()
 modifyRequestablePieces mut = liftF $ ModifyRequestablePieces mut ()
 {-# INLINABLE modifyRequestablePieces #-}
 
-evalMemoryMonad :: TorrentState 'Production -> MemoryMonad (STM a) -> STM a
+evalMemoryMonad :: TorrentState -> MemoryMonad (STM a) -> STM a
 evalMemoryMonad state (GetDownloadProgress piece next) = do
   cf <- DP.lookup piece (torrentStateDownloadProgress state)
   next cf
@@ -130,6 +129,6 @@ evalMemoryMonad state (ModifyRequestablePieces mut next) = do
   next
 
 -- | Runs the whole transaction atomically under STM.
-runMemoryMonadSTM :: TorrentState 'Production -> F MemoryMonad a -> STM a
+runMemoryMonadSTM :: TorrentState -> F MemoryMonad a -> STM a
 runMemoryMonadSTM state m = iterM (evalMemoryMonad state) m `orElse` tracker
   where tracker = unsafeIOToSTM (putStrLn "RETRIED" *> traceMarkerIO "retry") *> retry

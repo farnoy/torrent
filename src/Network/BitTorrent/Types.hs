@@ -56,16 +56,16 @@ data PeerData = PeerData {
 data GlobalState = GlobalState {
   globalStatePeerId     :: ByteString
 , globalStateListenPort :: Word16
-, globalStateTorrents   :: TVar (Seq (TorrentState 'Production))
+, globalStateTorrents   :: TVar (Seq TorrentState)
 }
 
 data TorrentStatus = Active | Paused | Stopped
 
-data TorrentState (t :: ClassToken) = TorrentState {
+data TorrentState = TorrentState {
   torrentStateMetaInfo          :: MetaInfo
 , torrentStateBitField          :: TVar BitField
 , torrentStateRequestablePieces :: TVar IntSet
-, torrentStateDownloadProgress  :: DP.Backend t
+, torrentStateDownloadProgress  :: DP.ProgressStorage
 , torrentStateOutputHandles     :: Seq (Word64, Word64, Handle)
 , torrentStateOutputLock        :: MVar ()
 , torrentStateSharedMessages    :: Chan SharedMessage

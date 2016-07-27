@@ -4,8 +4,7 @@
 {-# LANGUAGE DataKinds #-}
 
 module Network.BitTorrent.Utility (
-  ClassToken(..)
-, divideSize
+  divideSize
 , boolToWord
 , fileOverlap
 , PieceId(..)
@@ -17,8 +16,6 @@ import Data.Sequence
 import Data.Word
 import Data.Hashable
 import GHC.Generics (Generic)
-
-data ClassToken = Production | Pure
 
 divideSize :: Integral a => a -> a -> a
 divideSize a b | a `rem` b > 0 = (a `quot` b) + 1
