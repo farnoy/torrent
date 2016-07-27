@@ -11,6 +11,7 @@ module Network.BitTorrent.RPCServer (
 import Control.Concurrent.STM
 import Control.Monad.IO.Class
 import Data.Aeson((.=), object, ToJSON(..))
+import qualified Data.ByteString as B
 import qualified Data.ByteString.Base16 as B16
 import Data.ByteString.Conversion (fromByteString)
 import qualified Data.Text as T
@@ -29,6 +30,7 @@ data TorrentInfo = TorrentInfo
   , torrentInfoProgress :: Float
   , torrentInfoStatus :: TorrentStatus
   , torrentInfoConnectedPeers :: Word32
+  , torrentInfoBitField :: [Word8]
   }
 
 statusToString :: TorrentStatus -> T.Text
@@ -43,6 +45,7 @@ instance ToJSON TorrentInfo where
            , "progress" .= torrentInfoProgress info
            , "status" .= statusToString (torrentInfoStatus info)
            , "peers" .= torrentInfoConnectedPeers info
+           , "bitField" .= torrentInfoBitField info
            ]
 
 extractTorrentInfo :: TorrentState 'Production -> IO TorrentInfo
@@ -56,7 +59,8 @@ extractTorrentInfo state = do
   let meta = torrentStateMetaInfo state
       Just infoHash = fromByteString $ B16.encode $ Meta.infoHash meta
       Just fileName = fromByteString $ Meta.name $ head $ Meta.files $ Meta.info $ torrentStateMetaInfo state
-  return $ TorrentInfo infoHash fileName (BF.completed bf) status peerCount
+
+  return $ TorrentInfo infoHash fileName (BF.completed bf) status peerCount (B.unpack $ BF.raw bf)
 
 server :: GlobalState -> ScottyM ()
 server globalState = do

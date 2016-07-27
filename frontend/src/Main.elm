@@ -6,6 +6,8 @@ import Http exposing (getString, post, multipart, stringData)
 import Http
 import Json.Decode exposing(..)
 import Json.Decode as Json
+import Svg
+import Svg.Attributes as Svg
 import Task as Task
 import Time
 
@@ -40,6 +42,7 @@ view model =
           , th [] [text "connected peers"]
           , th [] [text "start"]
           , th [] [text "stop"]
+          , th [] [text "bitfield"]
           ]
         ]
       , tbody [] (List.map viewTorrent model.activeTorrents)
@@ -50,13 +53,25 @@ view model =
 viewTorrent torrent =
   tr [] [
     td [] [text torrent.name]
-  , td [] [text <| toString torrent.progress]
+  , td [] [text <| toString (toFloat (round (torrent.progress * 10000)) / 100) ++ "%"]
   , td [] [text torrent.infoHash]
   , td [] [text torrent.status]
   , td [] [text <| toString torrent.peerCount]
   , td [] [button [ onClick (StartTorrent torrent.infoHash), disabled (torrent.status == "active") ] [ text "start" ] ]
   , td [] [button [ onClick (StopTorrent torrent.infoHash), disabled (torrent.status == "stopped") ] [ text "stop" ] ]
+  , td [] [
+      Svg.svg [Svg.width "300", Svg.height "80", Svg.viewBox ("0 0 " ++ toString (List.length torrent.bitField) ++ " 80"), Svg.preserveAspectRatio "none"]
+              (List.indexedMap viewBitField torrent.bitField)
+    ]
   ]
+
+viewBitField : Int -> Int -> Svg.Svg Msg
+viewBitField index bar =
+  let
+      xStr = toString index
+      y2 = 80 - toFloat bar / 255 * 80
+      y2Str = toString y2
+  in Svg.line [Svg.x1 xStr, Svg.y1 "80", Svg.x2 xStr, Svg.y2 y2Str, Svg.stroke "red"] []
 
 
 type Msg =
@@ -87,16 +102,18 @@ type alias ActiveTorrent =
   , progress : Float
   , status : String
   , peerCount : Int
+  , bitField : List Int
   }
 
 activeTorrentDecoder : Decoder ActiveTorrent
 activeTorrentDecoder =
-  Json.object5 ActiveTorrent
+  Json.object6 ActiveTorrent
     ("infoHash" := string)
     ("name" := string)
     ("progress" := float)
     ("status" := string)
     ("peers" := int)
+    ("bitField" := Json.Decode.list int)
 
 parseResponse : Result Http.Error String -> Msg
 parseResponse res =
