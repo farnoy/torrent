@@ -37,6 +37,7 @@ import GHC.Conc (unsafeIOToSTM)
 import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.DownloadProgress as DP
+import qualified Network.BitTorrent.LinkSpeed as LS
 import Network.BitTorrent.Types
 
 -- | Encodes memory operations.
@@ -51,6 +52,8 @@ data MemoryMonad a = GetDownloadProgress PieceId (Maybe CF.ChunkField -> a)
                    -}
                    | ReadRequestablePieces (IntSet -> a)
                    | ModifyRequestablePieces (IntSet -> IntSet) a
+                   | RecordDownloaded LS.Second LS.Bytes a
+                   | RecordUploaded LS.Second LS.Bytes a
                    deriving(Functor)
 
 getDownloadProgress :: PieceId -> F MemoryMonad (Maybe CF.ChunkField)
@@ -126,6 +129,12 @@ evalMemoryMonad state (ReadRequestablePieces next) = do
   next res
 evalMemoryMonad state (ModifyRequestablePieces mut next) = do
   modifyTVar' (torrentStateRequestablePieces state) (force . mut)
+  next
+evalMemoryMonad state (RecordDownloaded s b next) = do
+  modifyTVar' (torrentStateDownloadSpeed state) (LS.record s b)
+  next
+evalMemoryMonad state (RecordUploaded s b next) = do
+  modifyTVar' (torrentStateUploadSpeed state) (LS.record s b)
   next
 
 -- | Runs the whole transaction atomically under STM.

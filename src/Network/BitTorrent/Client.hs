@@ -41,6 +41,7 @@ import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Bencoding.Lenses
 import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.DownloadProgress as DP
+import qualified Network.BitTorrent.LinkSpeed as LP
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
 import Network.BitTorrent.PWP
@@ -72,7 +73,9 @@ newTorrentState dir meta = do
   dp <- atomically $ DP.new numPieces
   peerThreads <- newTVarIO Seq.empty
   status <- newTVarIO Active
-  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads status
+  downloadStore <- newTVarIO LP.empty
+  uploadStore <- newTVarIO LP.empty
+  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads status downloadStore uploadStore
 
 runTorrent :: GlobalState -> MetaInfo -> IO ()
 runTorrent globalState meta = do

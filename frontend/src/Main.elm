@@ -6,6 +6,7 @@ import Http exposing (getString, post, multipart, stringData)
 import Http
 import Json.Decode exposing(..)
 import Json.Decode as Json
+import String
 import Svg
 import Svg.Attributes as Svg
 import Task as Task
@@ -39,10 +40,12 @@ view model =
           , th [] [text "progress"]
           , th [] [text "infohash"]
           , th [] [text "status"]
+          , th [] [text "download speed"]
           , th [] [text "connected peers"]
           , th [] [text "start"]
           , th [] [text "stop"]
           , th [] [text "bitfield"]
+          , th [] [text "download speed history"]
           ]
         ]
       , tbody [] (List.map viewTorrent model.activeTorrents)
@@ -56,6 +59,7 @@ viewTorrent torrent =
   , td [] [text <| toString (toFloat (round (torrent.progress * 10000)) / 100) ++ "%"]
   , td [] [text torrent.infoHash]
   , td [] [text torrent.status]
+  , td [] [torrent.downloadSpeed |> List.filter (\a -> a /= 0) |> List.reverse |> List.take 5 |> List.map toFloat |> List.sum |> \a -> a / 1024 / 5 |> toString |> text]
   , td [] [text <| toString torrent.peerCount]
   , td [] [button [ onClick (StartTorrent torrent.infoHash), disabled (torrent.status == "active") ] [ text "start" ] ]
   , td [] [button [ onClick (StopTorrent torrent.infoHash), disabled (torrent.status == "stopped") ] [ text "stop" ] ]
@@ -63,15 +67,30 @@ viewTorrent torrent =
       Svg.svg [Svg.width "300", Svg.height "80", Svg.viewBox ("0 0 " ++ toString (List.length torrent.bitField) ++ " 80"), Svg.preserveAspectRatio "none"]
               (List.indexedMap viewBitField torrent.bitField)
     ]
+  , td [] [
+      Svg.svg [Svg.width "300", Svg.height "80", Svg.viewBox ("0 0 60 1000"), Svg.preserveAspectRatio "none"]
+              [(viewDownloadHistory torrent.downloadSpeed)]
+    ]
   ]
 
-viewBitField : Int -> Int -> Svg.Svg Msg
+viewBitField : Int -> Int -> Svg.Svg a
 viewBitField index bar =
   let
       xStr = toString index
       y2 = 80 - toFloat bar / 255 * 80
       y2Str = toString y2
   in Svg.line [Svg.x1 xStr, Svg.y1 "80", Svg.x2 xStr, Svg.y2 y2Str, Svg.stroke "red"] []
+
+viewDownloadHistory : List Int -> Svg.Svg a
+viewDownloadHistory hist =
+  let
+      points =  List.reverse hist
+             |> List.take 60
+             |> List.reverse
+             |> List.indexedMap (\ix hist -> [toString ix, toString <| 1000 - (toFloat hist) / 1000])
+             |> List.map (String.join ",")
+             |> String.join " "
+  in Svg.polyline [Svg.points points, Svg.stroke "blue", Svg.fill "none"] []
 
 
 type Msg =
@@ -103,17 +122,19 @@ type alias ActiveTorrent =
   , status : String
   , peerCount : Int
   , bitField : List Int
+  , downloadSpeed : List Int
   }
 
 activeTorrentDecoder : Decoder ActiveTorrent
 activeTorrentDecoder =
-  Json.object6 ActiveTorrent
+  Json.object7 ActiveTorrent
     ("infoHash" := string)
     ("name" := string)
     ("progress" := float)
     ("status" := string)
     ("peers" := int)
     ("bitField" := Json.Decode.list int)
+    ("downloadSpeed" := Json.Decode.list int)
 
 parseResponse : Result Http.Error String -> Msg
 parseResponse res =

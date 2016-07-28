@@ -80,10 +80,12 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Word
+import Flow
 -- import Data.Vector.Storable.Mutable as VS
 import qualified Network.BitTorrent.BitField as BF
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
+import qualified Network.BitTorrent.LinkSpeed as LS
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.MemoryMonad
 -- import Network.BitTorrent.PieceSelection as PS
@@ -265,6 +267,18 @@ log exp = do
     Just t -> liftF $ Log (exp t) ()
     Nothing -> return ()
 
+recordDownloaded :: LS.Bytes -> F PeerMonad ()
+recordDownloaded b = do
+  t <- getTime
+  let seconds = fromIntegral (utctDayTime t |> fromEnum) `quot` truncate 1e12
+  runMemory $ liftF $ RecordDownloaded seconds b ()
+
+recordUploaded :: LS.Bytes -> F PeerMonad ()
+recordUploaded b = do
+  t <- getTime
+  let seconds = fromIntegral (utctDayTime t |> fromEnum) `quot` truncate 1e12
+  runMemory $ liftF $ RecordUploaded seconds b ()
+
 -- | Runs a 'PeerMonad' in the IO monad.
 --
 -- Internally spawns threads to process events from multiple sources efficiently.
@@ -402,6 +416,7 @@ receiveChunk piece offset d = do
   updatePeerData (pData { requestsLive = requestsLive pData - 1 })
 
   when wasMarked $ do
+    recordDownloaded (B.length d |> fromIntegral)
     meta <- getMeta
     let infoDict = info meta
         defaultPieceLen = pieceLength infoDict

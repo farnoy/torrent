@@ -22,6 +22,7 @@ library
                    , Network.BitTorrent.Client
                    , Network.BitTorrent.DownloadProgress
                    , Network.BitTorrent.FileWriter
+                   , Network.BitTorrent.LinkSpeed
                    , Network.BitTorrent.MetaInfo
                    , Network.BitTorrent.MemoryMonad
                    , Network.BitTorrent.PeerMonad
@@ -45,6 +46,7 @@ library
                  , deepseq
                  , exceptions
                  , filepath
+                 , flow
                  , free
                  , hashable
                  , http-client
