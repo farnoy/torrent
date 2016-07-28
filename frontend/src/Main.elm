@@ -1,3 +1,4 @@
+import AnimationFrame exposing (times)
 import Html exposing (..)
 import Html.App as Html
 import Html.Attributes exposing (..)
@@ -6,27 +7,78 @@ import Http exposing (getString, post, multipart, stringData)
 import Http
 import Json.Decode exposing(..)
 import Json.Decode as Json
+import Json.Encode as Json
+import Json.Encode
 import String
 import Svg
 import Svg.Attributes as Svg
 import Task as Task
 import Time
 
+import Native.Test
+
+type alias DataSet = {
+    label : String
+  , data : List Float
+  }
+
+type alias ChartOptions = {
+    type_ : String
+  , data : {
+      labels: List String
+    , datasets: List DataSet
+    }
+  }
+
+encodeChartOptions : ChartOptions -> Json.Encode.Value
+encodeChartOptions {type_, data} =
+  let
+      datasets = List.map makeDataset data.datasets
+      makeDataset s = Json.object
+                        [ ("label", Json.Encode.string s.label)
+                        , ("data",
+                              List.map Json.Encode.float s.data
+                           |> Json.Encode.list)
+                        ]
+  in Json.Encode.object
+    [ ("type", Json.Encode.string type_)
+    , ("data", Json.Encode.object
+      [ ("labels",
+            List.map Json.Encode.string data.labels
+         |> Json.Encode.list)
+      , ("datasets", Json.Encode.list datasets)
+      ]
+    )
+    ]
+
+
+chart : String -> ChartOptions -> Task.Task x ()
+chart id opt = Native.Test.chart id (encodeChartOptions opt |> Json.encode 0)
+
 main =
   Html.program { init = init
                , view = view
                , update = update
-               , subscriptions = \_ -> Sub.batch [
-                   Time.every (5 * Time.second) (always ReloadActive)
-                 ]
+               , subscriptions = subscriptions
                }
 
+subscriptions : Model -> Sub Msg
+subscriptions model =
+  let
+      baseTimer = [Time.every (5 * Time.second) (always ReloadActive)]
+      graphChart = if model.pendingAnimFrameForChart then [times (always UpdateCharts)] else []
+  in Sub.batch <| baseTimer ++ graphChart
 
-type alias Model = { activeTorrents : List ActiveTorrent, connectionLive : Bool }
+
+type alias Model =
+  { activeTorrents : List ActiveTorrent
+  , connectionLive : Bool
+  , pendingAnimFrameForChart : Bool
+  }
 
 
 init : (Model, Cmd Msg)
-init = ({ activeTorrents = [], connectionLive = False },
+init = ({ activeTorrents = [], connectionLive = False, pendingAnimFrameForChart = False },
         Task.succeed ReloadActive |> Task.perform (\_ -> Noop) (\a -> a))
 
 
@@ -68,8 +120,7 @@ viewTorrent torrent =
               (List.indexedMap viewBitField torrent.bitField)
     ]
   , td [] [
-      Svg.svg [Svg.width "300", Svg.height "80", Svg.viewBox ("0 0 60 1000"), Svg.preserveAspectRatio "none"]
-              [(viewDownloadHistory torrent.downloadSpeed)]
+      canvas [id <| "download-speed-" ++ torrent.infoHash, width 600, height 200] []
     ]
   ]
 
@@ -100,19 +151,44 @@ type Msg =
   | LoseConnection
   | StartTorrent String
   | StopTorrent String
+  | UpdateCharts
 
+
+showChart : String -> ChartOptions -> Cmd Msg
+showChart id opt = chart id opt |> Task.perform (always Noop) (always Noop)
+
+showCharts : Model -> List (Cmd Msg)
+showCharts model =
+  let
+    chartOps torrent =
+      {
+        type_ = "line",
+        data = {
+          labels = List.indexedMap (\ix _ -> if (ix - 60) % 10 == 0 then toString (ix - 60) ++ "s" else "") torrent.downloadSpeed
+        , datasets = [{
+            label = "KiB/s"
+          , data = List.map (\val -> toFloat val / 1024) torrent.downloadSpeed
+          }]
+        }
+      }
+    makeId torrent = "download-speed-" ++ torrent.infoHash
+  in List.map (\t -> showChart (makeId t) (chartOps t)) model.activeTorrents
+
+fetchData : Cmd Msg
+fetchData = getString "http://localhost:8036/active"
+         |> Task.toResult
+         |> Task.perform (\_ -> Noop) parseResponse
 
 update : Msg -> Model -> (Model, Cmd Msg)
 update action model =
   case action of
-    ReloadActive -> (model, getString "http://localhost:8036/active"
-                     |> Task.toResult
-                     |> Task.perform (\_ -> Noop) parseResponse)
+    ReloadActive -> (model, fetchData)
     Noop -> (model, Cmd.none)
-    SetActiveTorrents list -> ({ model | activeTorrents = list, connectionLive = True }, Cmd.none)
+    SetActiveTorrents list -> ({ model | activeTorrents = list, pendingAnimFrameForChart = True, connectionLive = True }, Cmd.none)
     LoseConnection -> ({ model | activeTorrents = [], connectionLive = False }, Cmd.none)
     StartTorrent infoHash -> (model, post (keyValuePairs string) "http://localhost:8036/start" (multipart [stringData "infoHash" infoHash]) |> Task.toResult |> Task.perform (\_ -> Noop) (\_ -> Noop))
     StopTorrent infoHash -> (model, post (keyValuePairs string) "http://localhost:8036/stop" (multipart [stringData "infoHash" infoHash]) |> Task.toResult |> Task.perform (\_ -> Noop) (\_ -> Noop))
+    UpdateCharts -> ({ model | pendingAnimFrameForChart = False }, Cmd.batch <| showCharts model)
 
 type alias ActiveTorrent =
   {
@@ -139,7 +215,7 @@ activeTorrentDecoder =
 parseResponse : Result Http.Error String -> Msg
 parseResponse res =
   case res of
-    Ok str -> case decodeString (Json.list activeTorrentDecoder) str of
+    Ok str -> case decodeString (Json.Decode.list activeTorrentDecoder) str of
       Ok val -> SetActiveTorrents val
       Err err -> LoseConnection
     Err err -> LoseConnection
