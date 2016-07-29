@@ -1,0 +1,9 @@
+[submodule "frontend/elm-mdl"]
+	path = frontend/elm-mdl
+	url = https://github.com/debois/elm-mdl.git
+[submodule "frontend/elm-parts"]
+	path = frontend/elm-parts
+	url = https://github.com/debois/elm-parts.git
+[submodule "frontend/elm-dom"]
+	path = frontend/elm-dom
+	url = https://github.com/debois/elm-dom.git
