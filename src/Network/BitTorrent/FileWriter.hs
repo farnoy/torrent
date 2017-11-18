@@ -8,7 +8,7 @@ import Control.Concurrent
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Foldable (fold, traverse_)
-import Data.Sequence (Seq)
+import Data.Sequence (Seq, ViewR(..), ViewL(..), viewr, viewl, takeWhileL, dropWhileL, (<|), (|>))
 import Data.Word
 import Network.BitTorrent.Utility
 import System.IO
@@ -47,3 +47,19 @@ write hdls mvar offset block = {-# SCC "FW.write" #-} withMVar mvar (const go)
         overlapping = {-# SCC "overlapping" #-} fileOverlap addedBase offset (offset + fromIntegral (B.length block))
         addedBase = (\(lo, hi, hdl) -> (lo, lo, hi, hdl)) <$> hdls
 {-# INLINABLE write #-}
+
+-- | Finds overlaps of any range with given array.
+fileOverlap :: Seq (Word64, Word64, Word64, a) -- ^ Left-inclusive ranges to look in + user data
+            -> Word64                  -- ^ lower bound to lookup
+            -> Word64                  -- ^ upper bound to lookup
+            -> Seq (Word64, Word64, Word64, a)
+fileOverlap ranges lo hi = rightAdjusted
+  where leftDropped = dropWhileL (\(_, _, h, _) -> h <= lo) ranges
+        leftAdjusted = case viewl leftDropped of
+          (base, leftLo, leftHi, leftC) :< leftDropped -> (base, max leftLo lo, leftHi, leftC) <| leftDropped
+          _ -> leftDropped
+
+        rightDropped = takeWhileL (\(_, l, _, _) -> hi >= l) leftAdjusted
+        rightAdjusted = case viewr rightDropped of
+          rightDropped :> (base, rightLo, rightHi, rightC) -> rightDropped |> (base, rightLo, min rightHi hi, rightC)
+          EmptyR -> rightDropped

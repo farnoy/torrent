@@ -24,7 +24,6 @@ import qualified Network.BitTorrent.Client as Client
 import qualified Network.BitTorrent.LinkSpeed as LS
 import qualified Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.Types
-import Network.BitTorrent.Utility
 import Web.Scotty
 
 data TorrentInfo = TorrentInfo

@@ -13,14 +13,12 @@ import qualified Data.Attoparsec.ByteString.Lazy as AL
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
 import Data.Maybe (catMaybes)
-import qualified Data.Sequence as Seq
 import Network.BitTorrent.Bencoding
 import Network.BitTorrent.Client
 import Network.BitTorrent.MetaInfo
 import qualified Network.BitTorrent.RPCServer as RPC
 import Network.BitTorrent.Types
 import System.Environment
-import System.IO
 import System.Posix.Signals
 import Web.Scotty
 
@@ -37,7 +35,6 @@ main = do
   torrents <- traverse openTorrentFile args
   rpcServer <- async $ scotty 8036 (RPC.server globalState)
   listener <- btListen globalState
-  print torrents
   traverse_ (forkIO . runTorrent globalState) (catMaybes torrents)
   void $ installHandler sigINT (CatchOnce (cancel listener *> cancel rpcServer)) Nothing
   void $ forkIO $ progressLogger globalState
