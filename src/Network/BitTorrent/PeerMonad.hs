@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -57,7 +58,7 @@ import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
-import qualified Control.Monad.Except as Except
+import Control.Monad.Except as Except
 import Control.Monad.Identity
 import Control.Monad.Logger
 import Control.Monad.Reader
@@ -128,7 +129,7 @@ data PeerEvent = PWPEvent PWP
                | ErrorEvent PeerError
                deriving(Eq,Show)
 
-class (Monad m, MonadLogger m) => MonadPeer m where
+class (MonadLogger m, MonadError PeerError m) => MonadPeer m where
   runMemory :: (F MemoryMonad b) -> m b
   emit :: PWP -> m ()
   getPeerData :: m PeerData
@@ -141,8 +142,6 @@ class (Monad m, MonadLogger m) => MonadPeer m where
   registerActiveChunk :: PieceId -> ChunkId -> m ()
   deregisterActiveChunk :: PieceId -> ChunkId -> m ()
   getActiveChunks :: m ActiveChunks
-  throwError :: PeerError -> m ()
-  catchError :: m a -> (PeerError -> m a) -> m a
 
 instance MonadPeer PeerMonadIO where
   getMeta = torrentStateMetaInfo <$> ask
@@ -190,8 +189,6 @@ instance MonadPeer PeerMonadIO where
 
     put $ pState { peerStateActiveChunks = force $ Map.delete (pieceId, chunkId) activeChunks }
   getActiveChunks = get >>= pure . peerStateActiveChunks
-  throwError e = Except.throwError e
-  catchError action handler = Except.catchError action handler
 
 log :: (MonadPeer m, MonadLogger m) => (T.Text -> m ()) -> m ()
 log exp = do
