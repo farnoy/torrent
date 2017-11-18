@@ -128,7 +128,7 @@ data PeerEvent = PWPEvent PWP
                | ErrorEvent PeerError
                deriving(Eq,Show)
 
-class Monad m => MonadPeer m where
+class (Monad m, MonadLogger m) => MonadPeer m where
   runMemory :: (F MemoryMonad b) -> m b
   emit :: PWP -> m ()
   getPeerData :: m PeerData
@@ -143,7 +143,6 @@ class Monad m => MonadPeer m where
   getActiveChunks :: m ActiveChunks
   throwError :: PeerError -> m ()
   catchError :: m a -> (PeerError -> m a) -> m a
-  logExp :: (LoggingT IO ()) -> m ()
 
 instance MonadPeer PeerMonadIO where
   getMeta = torrentStateMetaInfo <$> ask
@@ -193,14 +192,12 @@ instance MonadPeer PeerMonadIO where
   getActiveChunks = get >>= pure . peerStateActiveChunks
   throwError e = Except.throwError e
   catchError action handler = Except.catchError action handler
-  logExp =
-    lift . lift . lift
 
-log :: MonadPeer m => (T.Text -> LoggingT IO ()) -> m ()
+log :: (MonadPeer m, MonadLogger m) => (T.Text -> m ()) -> m ()
 log exp = do
   pData <- getPeerData
   case fromByteString (B64.encode (peerId pData)) of
-    Just t -> logExp (exp t)
+    Just t -> exp t
     Nothing -> return ()
 
 
