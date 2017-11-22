@@ -45,6 +45,7 @@ library
                  , cryptohash
                  , deepseq
                  , exceptions
+                 , fast-logger
                  , filepath
                  , flow
                  , free
@@ -52,7 +53,6 @@ library
                  , http-client
                  , http-types
                  , lens-family
-                 , monad-logger
                  , mtl
                  , network
                  , random
@@ -127,7 +127,6 @@ test-suite torrent-test
                      , http-client
                      , ieee754
                      , lens-family
-                     , monad-logger
                      , mtl
                      , network
                      , quickcheck-instances

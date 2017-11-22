@@ -60,7 +60,6 @@ import Control.Monad.Catch as Catch
 import Control.Monad.Except (ExceptT, runExceptT)
 import Control.Monad.Except as Except
 import Control.Monad.Identity
-import Control.Monad.Logger
 import Control.Monad.Reader
 import Control.Monad.STM
 import Control.Monad.State.Strict
@@ -95,6 +94,7 @@ import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
 import Prelude hiding (log)
 import System.IO
+import System.Log.FastLogger
 
 -- | Maps (PieceId, ChunkId) pair with a timestamp.
 --
@@ -110,6 +110,7 @@ data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateChan :: Chan PeerEvent
                            , peerStateHandle :: Handle
                            , peerStateActiveChunks :: ActiveChunks
+                           , peerStateLogger :: FastLogger
                            }
 
 -- | Encodes exceptions that can happen in a peer loop.
@@ -119,7 +120,7 @@ data PeerError = ConnectionLost
 instance Exception PeerError
 
 -- TODO Logger
-type PeerMonadIO = ExceptT PeerError (ReaderT TorrentState (StateT PeerState (LoggingT IO)))
+type PeerMonadIO = ExceptT PeerError (ReaderT TorrentState (StateT PeerState IO))
 
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
@@ -129,7 +130,7 @@ data PeerEvent = PWPEvent PWP
                | ErrorEvent PeerError
                deriving(Eq,Show)
 
-class (MonadLogger m, MonadError PeerError m) => MonadPeer m where
+class (MonadError PeerError m) => MonadPeer m where
   runMemory :: (F MemoryMonad b) -> m b
   emit :: PWP -> m ()
   getPeerData :: m PeerData
@@ -142,6 +143,7 @@ class (MonadLogger m, MonadError PeerError m) => MonadPeer m where
   registerActiveChunk :: PieceId -> ChunkId -> m ()
   deregisterActiveChunk :: PieceId -> ChunkId -> m ()
   getActiveChunks :: m ActiveChunks
+  fastLog :: LogStr -> m ()
 
 instance MonadPeer PeerMonadIO where
   getMeta = torrentStateMetaInfo <$> ask
@@ -189,14 +191,17 @@ instance MonadPeer PeerMonadIO where
 
     put $ pState { peerStateActiveChunks = force $ Map.delete (pieceId, chunkId) activeChunks }
   getActiveChunks = get >>= pure . peerStateActiveChunks
+  fastLog str = do
+    state <- get
+    let logger = peerStateLogger state
+    liftIO $ logger (str <> toLogStr ("\n" :: T.Text))
 
-log :: (MonadPeer m, MonadLogger m) => (T.Text -> m ()) -> m ()
-log exp = do
+log':: (MonadPeer m) => (T.Text -> LogStr) -> m ()
+log' f = do
   pData <- getPeerData
   case fromByteString (B64.encode (peerId pData)) of
-    Just t -> exp t
+    Just t -> fastLog (f t)
     Nothing -> return ()
-
 
 
 -- | Runs a 'PeerMonad' in the IO monad.
@@ -214,25 +219,23 @@ runPeerMonad state pData outHandle t = do
   privateChan <- newChan
   sharedChan <- dupChan (torrentStateSharedMessages state)
 
-  let peerState = PeerState pData privateChan outHandle Map.empty
+  withFastLogger (LogStdout defaultBufSize) $ \logger -> do
+    let peerState = PeerState pData privateChan outHandle Map.empty logger
 
-  promise1 <- async $ messageForwarder outHandle privateChan
-  promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
+    promise1 <- async $ messageForwarder outHandle privateChan
+    promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
-  myId <- myThreadId
-  atomically $ modifyTVar' (torrentStatePeerThreads state) (Seq.|> (myId, peerId pData))
+    myId <- myThreadId
+    atomically $ modifyTVar' (torrentStatePeerThreads state) (Seq.|> (myId, peerId pData))
+    let action = evalStateT (runReaderT (runExceptT t) state) peerState
+        cleanup = do
+          cancel promise1
+          cancel promise2
+          hClose outHandle
+          atomically $ modifyTVar' (torrentStatePeerThreads state)
+                                  (Seq.filter ((/= myId) . fst))
 
-  let action = runStderrLoggingT (filterLogger filter (evalStateT (runReaderT (runExceptT t) state) peerState))
-      filter _ LevelDebug = False
-      filter _ _ = True
-      cleanup = do
-        cancel promise1
-        cancel promise2
-        hClose outHandle
-        atomically $ modifyTVar' (torrentStatePeerThreads state)
-                                 (Seq.filter ((/= myId) . fst))
-
-  action `finally` cleanup
+    action `finally` cleanup
 
   where
     messageForwarder handle privateChan = (do
@@ -330,7 +333,8 @@ processPiece piece@(PieceId pieceId) = do
 
     case dataToWrite of
       Just "hashFail" ->
-        log $ \peerid -> logDebugN $ "Hashfail " <> peerid <> " " <> T.pack (show pieceId)
+        -- log $ \peerid -> logDebugN $ "Hashfail " <> peerid <> " " <> T.pack (show pieceId)
+        return ()
       Just d -> {-# SCC "processPiece--writeData" #-} writeData (fromIntegral defaultPieceLen * fromIntegral pieceId) d
       Nothing -> return ()
 
@@ -490,7 +494,7 @@ releaseActiveChunk piece@(PieceId pieceId) chunkId = do
           Nothing -> pure ()
     Nothing -> pure ()
 
-  log $ \peerid -> logDebugN $ "Releasing " <> peerid <> " " <> T.pack (show (piece, chunkId))
+  -- log $ \peerid -> logDebugN $ "Releasing " <> peerid <> " " <> T.pack (show (piece, chunkId))
   deregisterActiveChunk piece chunkId
 
 -- | Runs the peer loop, processing all events.
@@ -507,21 +511,21 @@ entryPoint = catchError processEvent onError
           let timedOut = Map.filter (\date -> diffUTCTime t date > 10) activeChunks
               keys = fst <$> Map.toList timedOut
               allKeys = fst <$> Map.toList activeChunks
-          log $ \peerid -> logDebugN $ "checkup for " <> peerid <> " " <> T.pack (show allKeys) <> " actually releasing " <> T.pack (show keys)
+          log' $ \peerid -> toLogStr ("checkup for " :: T.Text) <> toLogStr peerid <> toLogStr (" " :: T.Text) <> toLogStr (show allKeys) <> toLogStr (" actually releasing " :: T.Text) <> toLogStr (show keys)
           traverse_ (uncurry releaseActiveChunk) keys
 
           when (Prelude.null keys) requestNextChunk
         onError ConnectionLost = do
-          log $ \peerid -> logInfoN $ "ConnectionLost to " <> peerid
+          -- log $ \peerid -> logInfoN $ "ConnectionLost to " <> peerid
           cleanup
         onError (AssertionFailed what) = do
-          log $ \peerid -> logErrorN $ "AssertionFailed for " <> peerid <> " with " <> T.pack what
+          -- log $ \peerid -> logErrorN $ "AssertionFailed for " <> peerid <> " with " <> T.pack what
           cleanup
         cleanup = do
           activeChunks <- getActiveChunks
           pData <- getPeerData
           updatePeerData $ pData { peerDataStopping = True }
           let keys = fst <$> Map.toList activeChunks
-          log $ \peerid -> logInfoN $ "exiting from " <> peerid <> " and releasing " <> T.pack (show keys)
+          -- log $ \peerid -> logInfoN $ "exiting from " <> peerid <> " and releasing " <> T.pack (show keys)
           traverse_ (uncurry releaseActiveChunk) keys
 
