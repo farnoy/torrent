@@ -72,17 +72,20 @@ import Data.ByteString.Conversion
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Base64 as B64
 import Data.ByteString.Internal as BI
-import Data.Foldable (traverse_)
+import Data.Foldable (traverse_, toList, foldlM)
 import qualified Data.IntSet as IntSet
-import Data.Map.Strict as Map
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Monoid
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Word
 import Flow
+import Foreign
 -- import Data.Vector.Storable.Mutable as VS
 import qualified Network.BitTorrent.BitField as BF
+import Network.BitTorrent.BlockingParser
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.FileWriter as FW
 import qualified Network.BitTorrent.LinkSpeed as LS
@@ -92,6 +95,8 @@ import Network.BitTorrent.MemoryMonad
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Utility
 import Network.BitTorrent.Types
+import Network.Socket (Socket, close, recvBuf)
+import Network.Socket.ByteString
 import Prelude hiding (log)
 import System.IO
 import System.Log.FastLogger
@@ -108,7 +113,7 @@ type ActiveChunks = Map (PieceId, ChunkId) UTCTime
 
 data PeerState = PeerState { peerStateData :: !PeerData
                            , peerStateChan :: Chan PeerEvent
-                           , peerStateHandle :: Handle
+                           , peerStateSocket :: Socket
                            , peerStateActiveChunks :: ActiveChunks
                            , peerStateLogger :: FastLogger
                            }
@@ -122,13 +127,18 @@ instance Exception PeerError
 -- TODO Logger
 type PeerMonadIO = ExceptT PeerError (ReaderT TorrentState (StateT PeerState IO))
 
+newtype VectorCallback = VectorCallback (IO ())
+
 -- | Encodes possible events that arrive in the 'PeerMonad'.
 --
 -- Retrieved by using 'getPeerEvent'.
 data PeerEvent = PWPEvent PWP
+               | ReadPieceEvent ReadPieceVectored
                | SharedEvent SharedMessage
                | ErrorEvent PeerError
-               deriving(Eq,Show)
+               -- deriving(Eq,Show)
+
+data ReadPieceVectored = ReadPieceVectored Word32 Word32 ByteString Word32 VectorCallback
 
 class (MonadError PeerError m) => MonadPeer m where
   runMemory :: (F MemoryMonad b) -> m b
@@ -137,8 +147,10 @@ class (MonadError PeerError m) => MonadPeer m where
   updatePeerData :: PeerData -> m ()
   getMeta :: m MetaInfo
   getTime :: m UTCTime
+  getVector :: Word64 -> Word64 -> m [ByteString]
   readData :: Word64 -> Word64 -> m ByteString
   writeData :: Word64 -> ByteString -> m ()
+  writeDataFromSocket :: [ByteString] -> m ()
   getPeerEvent :: m PeerEvent
   registerActiveChunk :: PieceId -> ChunkId -> m ()
   deregisterActiveChunk :: PieceId -> ChunkId -> m ()
@@ -154,16 +166,24 @@ instance MonadPeer PeerMonadIO where
     put $ pState { peerStateData = pData }
   emit pwp = do
     state <- get
-    let handle = peerStateHandle state
+    let socket = peerStateSocket state
 
     res <- liftIO $ Catch.catchIOError
-              (BL.hPut handle (Binary.encode pwp) *> return True)
+              (send socket (BL.toStrict $ Binary.encode pwp) *> return True)
               (const (return True))
 
     unless res $ Except.throwError ConnectionLost
   runMemory exp = do
     state <- ask
     liftIO $ atomically $ runMemoryMonadSTM state exp
+  getVector offset len = do
+    state <- ask
+    let mmaps = torrentStateOutputMMaps state
+        vectors = FW.vectors mmaps offset len
+        makeBS (p, len) = do
+          fp <- newForeignPtr_ p
+          return $ BI.PS fp 0 (fromIntegral len)
+    fmap toList $ liftIO (traverse makeBS vectors)
   readData o l = do
     state <- ask
     let hdls = torrentStateOutputHandles state
@@ -174,6 +194,24 @@ instance MonadPeer PeerMonadIO where
     let hdls = torrentStateOutputHandles state
         lock = torrentStateOutputLock state
     liftIO $ FW.write hdls lock o d
+  writeDataFromSocket bss = do
+    pState <- get
+    let socket = peerStateSocket pState
+    liftIO $ traverse_ (readInto socket) bss
+    where 
+      readInto socket (BI.PS fp off len) = do
+        withForeignPtr fp $ \ptr -> do
+          recvIntoBufExact socket (ptr `plusPtr` off) len
+
+      recvIntoBufExact :: Socket -> Ptr Word8 -> Int -> IO ()
+      recvIntoBufExact sock ptr n = recvIntoBufAtLeast sock ptr n n *> return ()
+
+      recvIntoBufAtLeast :: Socket -> Ptr Word8 -> Int -> Int -> IO Int
+      recvIntoBufAtLeast _ _ min _ | min <= 0 = return 0
+      recvIntoBufAtLeast sock ptr min max = do
+        nRead <- recvBuf sock ptr max
+        childRead <- recvIntoBufAtLeast sock (ptr `plusPtr` fromIntegral nRead) (min - nRead) (max - nRead)
+        return $ nRead + childRead
   getPeerEvent = do
     pState <- get
     liftIO $ readChan $ peerStateChan pState
@@ -212,17 +250,19 @@ log' f = do
 -- Nested 'MemoryMonad' expressions are evaluated using STM.
 runPeerMonad :: TorrentState
              -> PeerData
-             -> Handle -- ^ socket handle to communicate with the peer
+             -> Socket -- ^ socket handle to communicate with the peer
              -> PeerMonadIO a
              -> IO (Either PeerError a)
-runPeerMonad state pData outHandle t = do
+runPeerMonad state pData socket t = do
   privateChan <- newChan
   sharedChan <- dupChan (torrentStateSharedMessages state)
 
-  withFastLogger (LogStdout defaultBufSize) $ \logger -> do
-    let peerState = PeerState pData privateChan outHandle Map.empty logger
+  promise1 <- async $ operateSocket socket (handleParser socket privateChan)
 
-    promise1 <- async $ messageForwarder outHandle privateChan
+  withFastLogger (LogStdout defaultBufSize) $ \logger -> do
+    let peerState = PeerState pData privateChan socket Map.empty logger
+
+    -- promise1 <- async $ messageForwarder socket privateChan
     promise2 <- async $ forever $ readChan sharedChan >>= writeChan privateChan . SharedEvent
 
     myId <- myThreadId
@@ -231,24 +271,34 @@ runPeerMonad state pData outHandle t = do
         cleanup = do
           cancel promise1
           cancel promise2
-          hClose outHandle
+          close socket
           atomically $ modifyTVar' (torrentStatePeerThreads state)
                                   (Seq.filter ((/= myId) . fst))
 
     action `finally` cleanup
 
   where
-    messageForwarder handle privateChan = (do
-      messageStream handle (writeChan privateChan . PWPEvent))
+    handleParser socket privateChan (ReadPWP msg) = writeChan privateChan (PWPEvent msg)
+    handleParser socket privateChan (ReadPiece pid offset block remaining callback) = do
+      let callback' = VectorCallback callback
+      writeChan privateChan (ReadPieceEvent $ ReadPieceVectored pid offset block remaining callback')
+    recvAtLeast :: Socket -> Int -> IO ByteString
+    recvAtLeast _ num | num <= 0 = return B.empty
+    recvAtLeast sock num = do
+      buf <- recv sock num
+      let nRead = B.length buf
+      childRead <- recvAtLeast sock (num - nRead)
+      return $ buf <> childRead
+    messageForwarder socket privateChan = (do
+      messageStream socket (writeChan privateChan . PWPEvent))
       `onException` writeChan privateChan (ErrorEvent ConnectionLost)
-    messageStream :: Handle -> (PWP -> IO ()) -> IO ()
-    messageStream hdl act = go initial
+    messageStream :: Socket -> (PWP -> IO ()) -> IO ()
+    messageStream socket act = go initial
       where initial = Binary.runGetIncremental Binary.get
             bufSize = (2 :: Int) ^ (14 :: Int)
             go (Binary.Fail {}) = return ()
             go (Binary.Partial next) = do
-              hWaitForInput hdl (-1)
-              B.hGetSome hdl bufSize >>= go . next . Just
+              recv socket bufSize >>= go . next . Just
             go (Binary.Done unused _ value) =
               act value *> go (initial `Binary.pushChunk` unused)
 
@@ -263,6 +313,36 @@ recordUploaded b = do
   t <- getTime
   let seconds = fromIntegral (utctDayTime t |> fromEnum) `quot` truncate (1e12 :: Float)
   runMemory $ liftF $ RecordUploaded seconds b ()
+
+receiveVectoredChunk :: MonadPeer m => ReadPieceVectored -> m ()
+receiveVectoredChunk (ReadPieceVectored pid offset block rem callback) = do
+  let chunkIndex = ChunkId (divideSize offset defaultChunkSize)
+      piece = PieceId pid
+
+  wasMarked <- runMemory $ {-# SCC "receiveChunk--memory" #-} do
+    dp <- getDownloadProgress piece
+    case dp of
+      Just chunkField -> do
+        let chunkField' = CF.markCompleted chunkField chunkIndex
+        setDownloadProgress piece (force chunkField')
+        return True
+      _ -> return False -- someone already filled this
+
+  deregisterActiveChunk piece chunkIndex
+  pData <- getPeerData
+  updatePeerData (pData { requestsLive = requestsLive pData - 1 })
+
+  when wasMarked $ do
+    meta <- getMeta
+    let infoDict = info meta
+        defaultPieceLen = pieceLength infoDict
+        PieceId pix = piece
+        totalLen = fromIntegral $ B.length block + fromIntegral rem
+    recordDownloaded (fromIntegral totalLen)
+    vectors <- getVector (fromIntegral pix * fromIntegral defaultPieceLen + fromIntegral offset) totalLen
+    bss' <- foldlM f vectors 
+    writeData (fromIntegral pix * fromIntegral defaultPieceLen + fromIntegral offset) d
+    processPiece piece
 
 receiveChunk :: MonadPeer m => PieceId -> Word32 -> ByteString -> m ()
 receiveChunk piece offset d = do
@@ -502,6 +582,7 @@ entryPoint :: MonadPeer m => m ()
 entryPoint = catchError processEvent onError
   where processEvent = forever (getPeerEvent >>= handler)
         handler (PWPEvent pwp) = handlePWP pwp
+        handler (ReadPieceEvent rp) = receiveVectoredChunk rp >> requestNextChunk
         handler (ErrorEvent err) = throwError err
         handler (SharedEvent RequestPiece) = requestNextChunk
         handler (SharedEvent Exit) = throwError ConnectionLost

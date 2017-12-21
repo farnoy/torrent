@@ -31,6 +31,7 @@ import Network.BitTorrent.BitField (BitField)
 import Network.BitTorrent.ChunkField as CF
 import qualified Network.BitTorrent.DownloadProgress as DP
 import qualified Network.BitTorrent.LinkSpeed as LP
+import Network.BitTorrent.MemoryMap
 import Network.BitTorrent.MetaInfo as Meta
 -- import Network.BitTorrent.PieceSelection as PS
 import Network.BitTorrent.Utility
@@ -68,6 +69,7 @@ data TorrentState = TorrentState {
 , torrentStateRequestablePieces :: TVar IntSet
 , torrentStateDownloadProgress  :: DP.ProgressStorage
 , torrentStateOutputHandles     :: Seq (Word64, Word64, Handle)
+, torrentStateOutputMMaps       :: Seq (Word64, Word64, MemoryMap)
 , torrentStateOutputLock        :: MVar ()
 , torrentStateSharedMessages    :: Chan SharedMessage
 , torrentStatePeerThreads       :: TVar (Seq (ThreadId, ByteString))

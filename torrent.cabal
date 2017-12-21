@@ -1,149 +1,171 @@
-name:                torrent
-version:             0.1.0.0
-synopsis:            Torrent client
-description:         Please see README.md
-homepage:            http://github.com/farnoy/torrent
-license:             BSD3
-license-file:        LICENSE
-author:              Jakub Okoński
-maintainer:          jakub@okonski.org
--- copyright:
-category:            Web
-build-type:          Simple
--- extra-source-files:
-cabal-version:       >=1.10
+-- This file has been generated from package.yaml by hpack version 0.21.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 76e8acb04e555796aa06ad7848626caf55d3abdf1fa9d4838ff3a7c8607364ff
 
-library
-  hs-source-dirs:      src
-  exposed-modules:   Network.BitTorrent.Bencoding
-                   , Network.BitTorrent.Bencoding.Lenses
-                   , Network.BitTorrent.BitField
-                   , Network.BitTorrent.ChunkField
-                   , Network.BitTorrent.Client
-                   , Network.BitTorrent.DownloadProgress
-                   , Network.BitTorrent.FileWriter
-                   , Network.BitTorrent.LinkSpeed
-                   , Network.BitTorrent.MetaInfo
-                   , Network.BitTorrent.MemoryMonad
-                   , Network.BitTorrent.PeerMonad
-                   , Network.BitTorrent.PieceSelection
-                   , Network.BitTorrent.PWP
-                   , Network.BitTorrent.RPCServer
-                   , Network.BitTorrent.Types
-                   , Network.BitTorrent.Utility
-  ghc-options:   -Wall -O2 -fprof-auto -fprof-cafs -fno-warn-name-shadowing
-  build-depends:   base >= 4.7 && < 5
-                 , aeson
-                 , async
-                 , attoparsec
-                 , binary
-                 , base16-bytestring
-                 , base64-bytestring
-                 , bytestring
-                 , bytestring-conversion
-                 , containers
-                 , cryptohash
-                 , deepseq
-                 , exceptions
-                 , fast-logger
-                 , filepath
-                 , flow
-                 , free
-                 , hashable
-                 , http-client
-                 , http-types
-                 , lens-family
-                 , mtl
-                 , network
-                 , random
-                 , scotty
-                 , stm
-                 , stm-containers
-                 , text
-                 , time
-                 , transformers
-                 , unix
-                 , uuid
-                 , vector
-  default-language:    Haskell2010
-
-executable torrent
-  hs-source-dirs:      app
-  main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -Wall -O2 -fprof-auto -fno-warn-name-shadowing
-  build-depends:       base
-                     , attoparsec
-                     , async
-                     , binary
-                     , base64-bytestring
-                     , bytestring
-                     , bytestring-conversion
-                     , containers
-                     , cryptohash
-                     , http-client
-                     , http-types
-                     , lens-family
-                     , network
-                     , scotty
-                     , stm
-                     , torrent
-                     , unix
-                     , uuid
-                     , vector
-  default-language:    Haskell2010
-
-test-suite torrent-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  other-modules: BencodingSpec
-               , BitFieldSpec
-               , ChunkFieldSpec
-               , ClientSpec
-               , Discover
-               , FileWriterSpec
-               , MetaInfoSpec
-               , PWPSpec
-               , PeerMonadSpec
-               , PieceSelectionSpec
-               , SpecHelper
-
-  build-depends:       base
-                     , attoparsec
-                     , async
-                     , binary
-                     , base64-bytestring
-                     , bytestring
-                     , bytestring-conversion
-                     , containers
-                     , cryptohash
-                     , deepseq
-                     , directory
-                     , exceptions
-                     , filepath
-                     , free
-                     , hspec
-                     , hspec-smallcheck
-                     , http-client
-                     , ieee754
-                     , lens-family
-                     , mtl
-                     , network
-                     , quickcheck-instances
-                     , QuickCheck
-                     , random
-                     , smallcheck
-                     , stm
-                     , text
-                     , torrent
-                     , time
-                     , unordered-containers
-                     , uuid
-                     , vector
-  ghc-options:         -O2 -auto-all -fprof-cafs -fprof-auto -Wall -fno-warn-name-shadowing
-  cpp-options: -DTESTING
-  default-language:    Haskell2010
+name:           torrent
+version:        0.1.0.0
+synopsis:       Torrent client
+description:    Please see README.md
+category:       Web
+homepage:       http://github.com/farnoy/torrent
+bug-reports:    https://github.com/farnoy/torrent/issues
+author:         Jakub Okoński
+maintainer:     jakub@okonski.org
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
 
 source-repository head
-  type:     git
-  location: https://github.com/name/project
+  type: git
+  location: https://github.com/farnoy/torrent
+
+library
+  exposed-modules:
+      Network.BitTorrent.Bencoding
+      Network.BitTorrent.Bencoding.Lenses
+      Network.BitTorrent.Client
+      Network.BitTorrent.MetaInfo
+      Network.BitTorrent.RPCServer
+      Network.BitTorrent.Types
+  other-modules:
+      Network.BitTorrent.BitField
+      Network.BitTorrent.BlockingParser
+      Network.BitTorrent.ChunkField
+      Network.BitTorrent.DownloadProgress
+      Network.BitTorrent.FileWriter
+      Network.BitTorrent.LinkSpeed
+      Network.BitTorrent.MemoryMap
+      Network.BitTorrent.MemoryMonad
+      Network.BitTorrent.PeerMonad
+      Network.BitTorrent.PieceSelection
+      Network.BitTorrent.PWP
+      Network.BitTorrent.Utility
+      Paths_torrent
+  hs-source-dirs:
+      src
+  ghc-options: -Wall -O2 -fprof-auto -fprof-cafs -fno-warn-name-shadowing
+  build-depends:
+      aeson
+    , async
+    , attoparsec
+    , base >=4.7 && <5
+    , base16-bytestring
+    , base64-bytestring
+    , binary
+    , bytestring
+    , bytestring-conversion
+    , cereal
+    , containers
+    , cryptohash
+    , deepseq
+    , exceptions
+    , fast-logger
+    , filepath
+    , flow
+    , free
+    , hashable
+    , http-client
+    , http-types
+    , lens-family
+    , mtl
+    , network
+    , protolude
+    , random
+    , scotty
+    , stm
+    , text
+    , time
+    , transformers
+    , unix
+    , uuid
+    , vector
+  default-language: Haskell2010
+
+executable torrent
+  main-is: Main.hs
+  other-modules:
+      Paths_torrent
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -O2 -fprof-auto -fprof-cafs -fno-warn-name-shadowing -threaded -rtsopts
+  build-depends:
+      async
+    , attoparsec
+    , base >=4.7 && <5
+    , base64-bytestring
+    , binary
+    , bytestring
+    , bytestring-conversion
+    , containers
+    , cryptohash
+    , http-client
+    , http-types
+    , lens-family
+    , mtl
+    , network
+    , scotty
+    , stm
+    , torrent
+    , unix
+    , uuid
+    , vector
+  default-language: Haskell2010
+
+test-suite torrent-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      BencodingSpec
+      BitFieldSpec
+      ChunkFieldSpec
+      ClientSpec
+      Discover
+      FileWriterSpec
+      MetaInfoSpec
+      PeerMonadSpec
+      PieceSelectionSpec
+      PWPSpec
+      SpecHelper
+      Paths_torrent
+  hs-source-dirs:
+      test
+  ghc-options: -Wall -O2 -fprof-auto -fprof-cafs -fno-warn-name-shadowing
+  cpp-options: -DTESTING
+  build-depends:
+      QuickCheck
+    , async
+    , attoparsec
+    , base >=4.7 && <5
+    , base64-bytestring
+    , binary
+    , bytestring
+    , bytestring-conversion
+    , containers
+    , cryptohash
+    , deepseq
+    , directory
+    , exceptions
+    , filepath
+    , free
+    , hspec
+    , hspec-smallcheck
+    , http-client
+    , ieee754
+    , lens-family
+    , mtl
+    , network
+    , quickcheck-instances
+    , random
+    , scotty
+    , smallcheck
+    , stm
+    , text
+    , time
+    , torrent
+    , unordered-containers
+    , uuid
+    , vector
+  default-language: Haskell2010

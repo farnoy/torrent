@@ -17,7 +17,7 @@ import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import Data.Word
 
-type Second = Integer
+type Second = Word64
 type Bytes = Word64
 
 data Store = Store {
@@ -29,7 +29,7 @@ empty :: Store
 empty = Store 0 Seq.empty
 
 record :: Second -> Bytes -> Store -> Store
-record t a (Store sess buf) = Store (sess + a) (trim newBuffer)
+record !t a (Store sess buf) = Store (sess + a) (trim newBuffer)
   where newBuffer = case Seq.findIndexR ((==t) . fst) buf of
           Just ix -> Seq.adjust (\(t', a') -> force (t', a' + a)) ix buf
           Nothing -> buf Seq.|> (force (t, a))

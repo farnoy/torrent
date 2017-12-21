@@ -2,7 +2,8 @@
 -- Operations are threadsafe with explicit mutex locking.
 module Network.BitTorrent.FileWriter (
   Network.BitTorrent.FileWriter.read
-, write) where
+, write
+, vectors) where
 
 import Control.Concurrent
 import Data.ByteString (ByteString)
@@ -10,6 +11,8 @@ import qualified Data.ByteString as B
 import Data.Foldable (fold, traverse_)
 import Data.Sequence (Seq, ViewR(..), ViewL(..), viewr, viewl, takeWhileL, dropWhileL, (<|), (|>))
 import Data.Word
+import Foreign
+import Network.BitTorrent.MemoryMap
 import Network.BitTorrent.Utility
 import System.IO
 
@@ -63,3 +66,14 @@ fileOverlap ranges lo hi = rightAdjusted
         rightAdjusted = case viewr rightDropped of
           rightDropped :> (base, rightLo, rightHi, rightC) -> rightDropped |> (base, rightLo, min rightHi hi, rightC)
           EmptyR -> rightDropped
+
+vectors :: Seq (Word64, Word64, MemoryMap)
+        -> Word64 -- ^ lower bound in bytes
+        -> Word64 -- ^ upper bound in bytes
+        -> Seq (Ptr Word8, Word64) -- ^ vectors of pairs (base ptr, len)
+vectors ranges lo hi = fmap preparePtr overlapping
+  where
+    addedBase = (\(lo, hi, mmap) -> (lo, lo, hi, mmap)) <$> ranges
+    overlapping = fileOverlap addedBase lo hi
+    preparePtr :: (Word64, Word64, Word64, MemoryMap) -> (Ptr Word8, Word64)
+    preparePtr (_, lo, hi, mmap) = (getPtr mmap `plusPtr` (fromIntegral lo), hi)

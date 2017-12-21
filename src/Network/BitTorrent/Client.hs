@@ -42,12 +42,14 @@ import Network.BitTorrent.Bencoding.Lenses
 import qualified Network.BitTorrent.BitField as BF
 import qualified Network.BitTorrent.DownloadProgress as DP
 import qualified Network.BitTorrent.LinkSpeed as LP
+import Network.BitTorrent.MemoryMap
 import Network.BitTorrent.MetaInfo as Meta
 import Network.BitTorrent.PeerMonad
 import Network.BitTorrent.PWP
 import Network.BitTorrent.Types
 import Network.HTTP.Client
-import Network.Socket
+import Network.Socket hiding (recv)
+import Network.Socket.ByteString
 import System.FilePath
 import System.IO
 
@@ -68,6 +70,7 @@ newTorrentState dir meta = do
   requestable_pieces <- newTVarIO $ IntSet.fromList [0..(numPieces-1)]
   bit_field <- newTVarIO $ BF.newBitField numPieces
   handles <- openHandles dir meta
+  mmaps <- openMMaps dir meta
   mvar <- newMVar ()
   sharedMessages <- newChan
   dp <- atomically $ DP.new numPieces
@@ -75,7 +78,7 @@ newTorrentState dir meta = do
   status <- newTVarIO Active
   downloadStore <- newTVarIO LP.empty
   uploadStore <- newTVarIO LP.empty
-  return $ TorrentState meta bit_field requestable_pieces dp handles mvar sharedMessages peerThreads status downloadStore uploadStore
+  return $ TorrentState meta bit_field requestable_pieces dp handles mmaps mvar sharedMessages peerThreads status downloadStore uploadStore
 
 runTorrent :: GlobalState -> MetaInfo -> IO ()
 runTorrent globalState meta = do
@@ -115,6 +118,15 @@ openHandles dir meta = fmap convert (foldM opener (0, []) (files (info meta)))
           return (offset + l, (offset, offset + l, hdl) : list)
         convert = Seq.fromList . reverse . snd
 
+openMMaps :: FilePath -> MetaInfo -> IO (Seq (Word64, Word64, MemoryMap))
+openMMaps dir meta = fmap convert (foldM opener (0, []) (files (info meta)))
+  where opener :: (Word64, [(Word64, Word64, MemoryMap)]) -> FileInfo -> IO (Word64, [(Word64, Word64, MemoryMap)])
+        opener (offset, list) (FileInfo l n) = do
+          -- TODO error handling
+          Right mmap <- openMMap (dir </> BC.unpack n) (fromIntegral l)
+          return (offset + l, (offset, offset + l, mmap) : list)
+        convert = Seq.fromList . reverse . snd
+
 -- | Listen for connections.
 -- Creates a new thread that accepts connections and spawns peer loops
 -- with them.
@@ -131,8 +143,8 @@ btListen globalState = do
 
 startFromPeerHandshake :: GlobalState -> Socket -> SockAddr -> IO ()
 startFromPeerHandshake globalState sock addr = do
-  handle <- socketToHandle sock ReadWriteMode
-  handshake <- readHandshake handle
+  -- handle <- socketToHandle sock ReadWriteMode
+  handshake <- readHandshake sock
 
   case handshake of
     Just (BHandshake hisInfoHash peer) -> do
@@ -146,19 +158,19 @@ startFromPeerHandshake globalState sock addr = do
 
           case status of
             Active -> do
-              writeHandshake handle globalState torrentState
+              writeHandshake sock globalState torrentState
 
               let bf = BF.newBitField (pieceCount torrentState)
                   pData = newPeer bf addr peer
 
-              mainPeerLoop torrentState pData handle
+              mainPeerLoop torrentState pData sock
               pure ()
 
             -- when stopped or paused, we don't accept any peers
-            Paused -> hClose handle
-            Stopped -> hClose handle
-        Nothing -> hClose handle
-    Nothing -> hClose handle
+            Paused -> close sock
+            Stopped -> close sock
+        Nothing -> close sock
+    Nothing -> close sock
 
 pieceCount :: TorrentState -> Word32
 pieceCount = fromIntegral . (`quot` 20) . B.length . pieces . info . torrentStateMetaInfo
@@ -168,10 +180,10 @@ reachOutToPeer :: GlobalState -> TorrentState -> SockAddr -> IO ()
 reachOutToPeer globalState state addr = do
   sock <- socket AF_INET Stream defaultProtocol
   connect sock addr
-  handle <- socketToHandle sock ReadWriteMode
+  -- handle <- socketToHandle sock ReadWriteMode
 
-  writeHandshake handle globalState state
-  handshake <- readHandshake handle
+  writeHandshake sock globalState state
+  handshake <- readHandshake sock
 
   case handshake of
     Just (BHandshake hisInfoHash hisId) -> do
@@ -180,26 +192,26 @@ reachOutToPeer globalState state addr = do
 
       when (hisInfoHash == ourInfoHash) $ do
         let pData = newPeer bitField addr hisId
-        mainPeerLoop state pData handle
+        mainPeerLoop state pData sock
         pure ()
-    Nothing -> hClose handle
+    Nothing -> close sock
 
-writeHandshake :: Handle -> GlobalState -> TorrentState -> IO ()
-writeHandshake handle globalState state = BL.hPut handle handshake
+writeHandshake :: Socket -> GlobalState -> TorrentState -> IO ()
+writeHandshake sock globalState state = sendAll sock (BL.toStrict handshake)
   where handshake = encode $ BHandshake (infoHash . torrentStateMetaInfo $ state) (globalStatePeerId globalState)
 {-# INLINABLE writeHandshake #-}
 
-readHandshake :: Handle -> IO (Maybe BHandshake)
-readHandshake handle = do
-  input <- BL.hGet handle 68
-  case decodeOrFail input of
+readHandshake :: Socket -> IO (Maybe BHandshake)
+readHandshake sock = do
+  input <- recv sock 68
+  case decodeOrFail (BL.fromStrict input) of
     Left _ -> pure Nothing -- the handshake is wrong/unsupported
     Right (_, _, handshake) -> pure $ Just handshake
 {-# INLINABLE readHandshake #-}
 
-mainPeerLoop :: TorrentState -> PeerData -> Handle -> IO (Either PeerError ())
-mainPeerLoop state pData handle =
-  runPeerMonad state pData handle entryPoint
+mainPeerLoop :: TorrentState -> PeerData -> Socket -> IO (Either PeerError ())
+mainPeerLoop state pData socket =
+  runPeerMonad state pData socket entryPoint
 
 -- | Ask the tracker for peers and return the result addresses.
 queryTracker :: GlobalState -> TorrentState -> IO [SockAddr]
