@@ -1,0 +1,94 @@
+name: torrent
+version: '0.1.0.0'
+synopsis: Torrent client
+description: Please see README.md
+category: Web
+author: Jakub Okoński
+maintainer: jakub@okonski.org
+license: BSD3
+github: farnoy/torrent
+homepage: http://github.com/farnoy/torrent
+ghc-options:
+- -Wall
+- -O2
+- -fprof-auto
+- -fprof-cafs
+- -fno-warn-name-shadowing
+dependencies:
+- async
+- attoparsec
+- base >=4.7 && <5
+- binary
+- base64-bytestring
+- bytestring
+- bytestring-conversion
+- containers
+- cryptohash
+- http-client
+- lens-family
+- mtl
+- network
+- scotty
+- stm
+- uuid
+- vector
+library:
+  source-dirs: src
+  exposed-modules:
+  - Network.BitTorrent.Bencoding
+  - Network.BitTorrent.Bencoding.Lenses
+  - Network.BitTorrent.Client
+  - Network.BitTorrent.MetaInfo
+  - Network.BitTorrent.RPCServer
+  - Network.BitTorrent.Types
+  dependencies:
+  - aeson
+  - base16-bytestring
+  - cereal
+  - deepseq
+  - exceptions
+  - fast-logger
+  - filepath
+  - flow
+  - free
+  - hashable
+  - http-types
+  - random
+  - protolude
+  - text
+  - time
+  - transformers
+  - unix
+executables:
+  torrent:
+    main: Main.hs
+    source-dirs: app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    dependencies:
+    - http-types
+    - torrent
+    - unix
+tests:
+  torrent-test:
+    main: Spec.hs
+    source-dirs: test
+    cpp-options: -DTESTING
+    dependencies:
+    - deepseq
+    - directory
+    - exceptions
+    - filepath
+    - free
+    - hspec
+    - hspec-smallcheck
+    - ieee754
+    - quickcheck-instances
+    - QuickCheck
+    - random
+    - smallcheck
+    - text
+    - torrent
+    - time
+    - unordered-containers
